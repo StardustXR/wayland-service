@@ -1,5 +1,5 @@
-use crate::wayland::{
-	Client, WaylandResult,
+use crate::{
+	 util::WaylandResult,
 	core::buffer::{Buffer, BufferBacking},
 	dmabuf::{DMABUF_FORMATS, buffer_backing::DmabufBacking},
 };
