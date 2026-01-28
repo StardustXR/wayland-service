@@ -317,6 +317,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "display-socket-finder"
+version = "0.1.0"
+dependencies = [
+ "directories",
+]
+
+[[package]]
 name = "drm-fourcc"
 version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

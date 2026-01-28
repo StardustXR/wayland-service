@@ -46,18 +46,21 @@ impl VkContext {
                 )],
                 ..Default::default()
             },
-        );
-        let phys_dev = render_dev.get_physical_device(instance.clone()).unwrap();
+        )
+        .unwrap();
+        let phys_dev = render_dev.get_physical_device(&instance).unwrap();
 
         let queue_family_index = phys_dev
             .queue_family_properties()
             .iter()
             .enumerate()
-            .filter_map(|(i, p)| {
+            .find(|(_, p)| {
                 p.queue_flags.contains(QueueFlags::TRANSFER)
                     && !p.queue_flags.contains(QueueFlags::PROTECTED)
-            });
-        let (dev, queues) = Device::new(
+            })
+            .unwrap()
+            .0 as u32;
+        let (dev, mut queues) = Device::new(
             phys_dev.clone(),
             DeviceCreateInfo {
                 queue_create_infos: vec![QueueCreateInfo {
@@ -98,6 +101,7 @@ fn debug_callback(
         DebugUtilsMessageType::VALIDATION => "Validation",
         DebugUtilsMessageType::PERFORMANCE => "Performance",
         DebugUtilsMessageType::GENERAL => "Misc",
+        _ => "Unknown",
     };
     match level {
         DebugUtilsMessageSeverity::ERROR => {
@@ -112,5 +116,6 @@ fn debug_callback(
         DebugUtilsMessageSeverity::VERBOSE => {
             debug!("VK-{msg_type}: {}", data.message)
         }
+        _ => {}
     }
 }

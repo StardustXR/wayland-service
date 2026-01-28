@@ -9,6 +9,9 @@ license = "GPLv2"
 # repository = "https://github.com/StardustXR/stardust-xr-server/"
 homepage = "https://stardustxr.org"
 
+[workspace]
+members = ["display-socket-finder"]
+
 [dependencies]
 waynest = { git = "https://github.com/verdiwm/waynest.git", default-features = false }
 waynest-protocols = { git = "https://github.com/verdiwm/waynest.git", features = [
@@ -30,7 +33,12 @@ futures-sink = "0.3.31"
 stardust-xr-gluon = { git = "https://github.com/StardustXR/core.git", version = "0.50.0" }
 stardust-xr-fusion = { git = "https://github.com/StardustXR/core.git", version = "0.50.0" }
 stardust-xr-cme = { git = "https://github.com/StardustXR/cme.git", version = "0.50.0" }
-tokio = { version = "1.49.0", features = ["macros", "rt", "rt-multi-thread", "tracing"] }
+tokio = { version = "1.49.0", features = [
+	"macros",
+	"rt",
+	"rt-multi-thread",
+	"tracing",
+] }
 tracing = { version = "0.1.44", features = ["async-await"] }
 tracing-subscriber = "0.3.22"
 thiserror = "2.0.17"
