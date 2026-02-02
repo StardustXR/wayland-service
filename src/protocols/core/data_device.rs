@@ -1,4 +1,4 @@
-use crate::wayland::{Client, WaylandResult};
+use crate::{client::Client, error::WaylandResult};
 use std::os::fd::OwnedFd;
 use waynest::ObjectId;
 use waynest_protocols::server::core::wayland::{
@@ -9,7 +9,7 @@ use waynest_server::Client as _;
 // TODO: actually implement this
 
 #[derive(Debug, waynest_server::RequestDispatcher)]
-#[waynest(error = crate::wayland::WaylandError, connection = crate::wayland::Client)]
+#[waynest(error = crate::error::WaylandError, connection = crate::client::Client)]
 pub struct DataDeviceManager;
 impl WlDataDeviceManager for DataDeviceManager {
 	type Connection = Client;
@@ -37,7 +37,7 @@ impl WlDataDeviceManager for DataDeviceManager {
 }
 
 #[derive(Debug, waynest_server::RequestDispatcher)]
-#[waynest(error = crate::wayland::WaylandError, connection = crate::wayland::Client)]
+#[waynest(error = crate::error::WaylandError, connection = crate::client::Client)]
 pub struct DataSource {
 	id: ObjectId,
 }
@@ -73,7 +73,7 @@ impl WlDataSource for DataSource {
 }
 
 #[derive(Debug, waynest_server::RequestDispatcher)]
-#[waynest(error = crate::wayland::WaylandError, connection = crate::wayland::Client)]
+#[waynest(error = crate::error::WaylandError, connection = crate::client::Client)]
 pub struct DataDevice;
 impl WlDataDevice for DataDevice {
 	type Connection = Client;
@@ -110,7 +110,7 @@ impl WlDataDevice for DataDevice {
 }
 
 #[derive(Debug, waynest_server::RequestDispatcher)]
-#[waynest(error = crate::wayland::WaylandError, connection = crate::wayland::Client)]
+#[waynest(error = crate::error::WaylandError, connection = crate::client::Client)]
 pub struct DataOffer {
 	id: ObjectId,
 }

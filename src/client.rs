@@ -13,7 +13,7 @@ use crate::{
         presentation::MonotonicTimestamp,
         xdg::toplevel::Toplevel,
     },
-    util::WaylandError,
+    error::WaylandError,
 };
 
 impl<T: Clone> From<StoreError<T>> for WaylandError {

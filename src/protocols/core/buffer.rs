@@ -2,7 +2,7 @@ use crate::client::{Client, Message, MessageSink};
 use crate::protocols::{
     core::shm_buffer_backing::ShmBufferBacking, dmabuf::buffer_backing::DmabufBacking,
 };
-use crate::util::WaylandResult;
+use crate::error::WaylandResult;
 
 use std::sync::Arc;
 use waynest::ObjectId;
@@ -37,7 +37,7 @@ pub enum BufferBacking {
 }
 
 #[derive(Debug, RequestDispatcher)]
-#[waynest(error = crate::util::WaylandError, connection = crate::client::Client)]
+#[waynest(error = crate::error::WaylandError, connection = crate::client::Client)]
 pub struct Buffer {
     pub id: ObjectId,
     backing: BufferBacking,

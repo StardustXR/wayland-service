@@ -1,7 +1,6 @@
-use crate::core::Id;
-use crate::wayland::Client;
-use crate::wayland::WaylandResult;
-use crate::wayland::core::{keyboard::Keyboard, pointer::Pointer, surface::Surface, touch::Touch};
+use crate::client::Client;
+use crate::error::WaylandResult;
+use crate::protocols::core::{keyboard::Keyboard, pointer::Pointer, surface::Surface, touch::Touch};
 use mint::Vector2;
 use std::sync::Arc;
 use std::sync::OnceLock;
@@ -30,7 +29,7 @@ pub enum SeatMessage {
 	},
 	KeyboardKey {
 		surface: Arc<Surface>,
-		keymap_id: Id,
+		keymap_id: u64,
 		key: u32,
 		pressed: bool,
 	},
@@ -50,7 +49,7 @@ pub enum SeatMessage {
 }
 
 #[derive(Default, waynest_server::RequestDispatcher)]
-#[waynest(error = crate::wayland::WaylandError, connection = crate::wayland::Client)]
+#[waynest(error = crate::error::WaylandError, connection = crate::client::Client)]
 pub struct Seat {
 	version: u32,
 	pointer: OnceLock<Arc<Pointer>>,
@@ -174,7 +173,7 @@ impl Seat {
 	}
 }
 impl WlSeat for Seat {
-	type Connection = crate::wayland::Client;
+	type Connection = crate::client::Client;
 
 	/// https://wayland.app/protocols/wayland#wl_seat:request:get_pointer
 	async fn get_pointer(

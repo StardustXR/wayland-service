@@ -1,10 +1,9 @@
 #![allow(unused)]
 
-
 use std::{
     fmt::Debug,
     io,
-    sync::{Arc, Mutex, Weak},
+    sync::{Arc, Mutex, Weak, atomic::{AtomicU32, Ordering}},
 };
 use tracing::info;
 use waynest::ObjectId;
@@ -13,7 +12,8 @@ use waynest_server::{Client as _, RequestDispatcher};
 
 use crate::{
     client::{Client, MessageSink},
-    display::Display, error::{WaylandError, WaylandResult},
+    display::Display,
+    error::{WaylandError, WaylandResult},
 };
 struct Surface;
 impl Surface {
@@ -155,4 +155,14 @@ pub trait BufferedState: Debug + Send + Sync + 'static {
     /// applies the pending changes to self
     fn apply(&mut self, pending: &mut Self);
     fn get_initial_pending(&self) -> Self;
+}
+#[derive(Debug)]
+pub struct CounterU32(AtomicU32);
+impl CounterU32 {
+    pub fn new(starting_value: u32) -> CounterU32 {
+        Self(AtomicU32::new(starting_value))
+    }
+    pub fn get(&self) -> u32 {
+        self.0.fetch_add(1, Ordering::Relaxed)
+    }
 }
