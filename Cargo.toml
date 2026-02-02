@@ -10,7 +10,7 @@ license = "GPLv2"
 homepage = "https://stardustxr.org"
 
 [workspace]
-members = ["display-socket-finder", "panel-common"]
+members = ["display-socket-finder"]
 
 [workspace.dependencies]
 mint = "0.5.9"
@@ -57,4 +57,3 @@ stardust-xr-gluon.workspace = true
 stardust-xr-fusion.workspace = true
 stardust-xr-cme.workspace = true
 vulkano.workspace = true
-panel-common.path = "./panel-common"
