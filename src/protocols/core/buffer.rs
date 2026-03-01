@@ -1,8 +1,8 @@
 use crate::client::{Client, Message, MessageSink};
+use crate::error::WaylandResult;
 use crate::protocols::{
     core::shm_buffer_backing::ShmBufferBacking, dmabuf::buffer_backing::DmabufBacking,
 };
-use crate::error::WaylandResult;
 
 use std::sync::Arc;
 use waynest::ObjectId;

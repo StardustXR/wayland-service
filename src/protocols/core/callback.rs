@@ -7,5 +7,5 @@ use waynest_server::RequestDispatcher;
 pub struct Callback(pub ObjectId);
 /// https://wayland.app/protocols/wayland#wl_callback
 impl WlCallback for Callback {
-	type Connection = crate::client::Client;
+    type Connection = crate::client::Client;
 }

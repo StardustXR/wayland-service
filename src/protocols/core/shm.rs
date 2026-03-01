@@ -8,40 +8,40 @@ use waynest_server::Client as _;
 #[waynest(error = crate::wayland::WaylandError, connection = crate::wayland::Client)]
 pub struct Shm;
 impl Shm {
-	pub async fn advertise_formats(
-		&self,
-		client: &mut Client,
-		sender_id: ObjectId,
-	) -> WaylandResult<()> {
-		self.format(client, sender_id, Format::Argb8888).await?;
-		self.format(client, sender_id, Format::Xrgb8888).await?;
+    pub async fn advertise_formats(
+        &self,
+        client: &mut Client,
+        sender_id: ObjectId,
+    ) -> WaylandResult<()> {
+        self.format(client, sender_id, Format::Argb8888).await?;
+        self.format(client, sender_id, Format::Xrgb8888).await?;
 
-		Ok(())
-	}
+        Ok(())
+    }
 }
 impl WlShm for Shm {
-	type Connection = crate::wayland::Client;
+    type Connection = crate::wayland::Client;
 
-	/// https://wayland.app/protocols/wayland#wl_shm:request:create_pool
-	async fn create_pool(
-		&self,
-		client: &mut Self::Connection,
-		_sender_id: ObjectId,
-		pool_id: ObjectId,
-		fd: OwnedFd,
-		size: i32,
-	) -> WaylandResult<()> {
-		client.insert(pool_id, ShmPool::new(fd, size, pool_id)?)?;
+    /// https://wayland.app/protocols/wayland#wl_shm:request:create_pool
+    async fn create_pool(
+        &self,
+        client: &mut Self::Connection,
+        _sender_id: ObjectId,
+        pool_id: ObjectId,
+        fd: OwnedFd,
+        size: i32,
+    ) -> WaylandResult<()> {
+        client.insert(pool_id, ShmPool::new(fd, size, pool_id)?)?;
 
-		Ok(())
-	}
+        Ok(())
+    }
 
-	/// https://wayland.app/protocols/wayland#wl_shm:request:release
-	async fn release(
-		&self,
-		_client: &mut Self::Connection,
-		_sender_id: ObjectId,
-	) -> WaylandResult<()> {
-		Ok(())
-	}
+    /// https://wayland.app/protocols/wayland#wl_shm:request:release
+    async fn release(
+        &self,
+        _client: &mut Self::Connection,
+        _sender_id: ObjectId,
+    ) -> WaylandResult<()> {
+        Ok(())
+    }
 }

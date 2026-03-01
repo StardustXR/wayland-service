@@ -3,7 +3,10 @@
 use std::{
     fmt::Debug,
     io,
-    sync::{Arc, Mutex, Weak, atomic::{AtomicU32, Ordering}},
+    sync::{
+        Arc, Mutex, Weak,
+        atomic::{AtomicU32, Ordering},
+    },
 };
 use tracing::info;
 use waynest::ObjectId;

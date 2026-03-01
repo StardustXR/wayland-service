@@ -8,12 +8,12 @@ use waynest::{Connection, ProtocolError, Socket};
 use waynest_server::{Store, StoreError};
 
 use crate::{
+    error::WaylandError,
     protocols::{
         core::{buffer::Buffer, callback::Callback, seat::SeatMessage, surface::Surface},
         presentation::MonotonicTimestamp,
         xdg::toplevel::Toplevel,
     },
-    error::WaylandError,
 };
 
 impl<T: Clone> From<StoreError<T>> for WaylandError {

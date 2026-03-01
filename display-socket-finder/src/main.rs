@@ -26,7 +26,14 @@ fn main() {
             if full_path {
                 print!("{}", path.to_str().unwrap());
             } else {
-                print!("{}", path.file_name().unwrap().to_str().unwrap().replace('X', ":"));
+                print!(
+                    "{}",
+                    path.file_name()
+                        .unwrap()
+                        .to_str()
+                        .unwrap()
+                        .replace('X', ":")
+                );
             }
         }
         _ => {

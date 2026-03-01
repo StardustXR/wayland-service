@@ -6,11 +6,11 @@ use crate::{socket::Wayland, vulkan_ctx::VkContext};
 
 pub mod client;
 pub mod display;
+pub mod error;
 pub mod protocols;
 pub mod registry;
 pub mod socket;
 pub mod util;
-pub mod error;
 pub mod vulkan_ctx;
 
 #[tokio::main]

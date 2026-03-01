@@ -125,7 +125,7 @@ impl Registry {
             client,
             sender_id,
             RegistryGlobals::DMABUF,
-			Dmabuf::INTERFACE.to_string(),
+            Dmabuf::INTERFACE.to_string(),
             Dmabuf::VERSION,
         )
         .await?;

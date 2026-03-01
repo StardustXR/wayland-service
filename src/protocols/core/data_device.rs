@@ -2,7 +2,7 @@ use crate::{client::Client, error::WaylandResult};
 use std::os::fd::OwnedFd;
 use waynest::ObjectId;
 use waynest_protocols::server::core::wayland::{
-	wl_data_device::*, wl_data_device_manager::*, wl_data_offer::WlDataOffer, wl_data_source::*,
+    wl_data_device::*, wl_data_device_manager::*, wl_data_offer::WlDataOffer, wl_data_source::*,
 };
 use waynest_server::Client as _;
 
@@ -12,155 +12,155 @@ use waynest_server::Client as _;
 #[waynest(error = crate::error::WaylandError, connection = crate::client::Client)]
 pub struct DataDeviceManager;
 impl WlDataDeviceManager for DataDeviceManager {
-	type Connection = Client;
+    type Connection = Client;
 
-	async fn create_data_source(
-		&self,
-		client: &mut Self::Connection,
-		_sender_id: ObjectId,
-		id: ObjectId,
-	) -> WaylandResult<()> {
-		client.insert(id, DataSource { id })?;
-		Ok(())
-	}
+    async fn create_data_source(
+        &self,
+        client: &mut Self::Connection,
+        _sender_id: ObjectId,
+        id: ObjectId,
+    ) -> WaylandResult<()> {
+        client.insert(id, DataSource { id })?;
+        Ok(())
+    }
 
-	async fn get_data_device(
-		&self,
-		client: &mut Client,
-		_sender_id: ObjectId,
-		id: ObjectId,
-		_seat: ObjectId,
-	) -> WaylandResult<()> {
-		client.insert(id, DataDevice)?;
-		Ok(())
-	}
+    async fn get_data_device(
+        &self,
+        client: &mut Client,
+        _sender_id: ObjectId,
+        id: ObjectId,
+        _seat: ObjectId,
+    ) -> WaylandResult<()> {
+        client.insert(id, DataDevice)?;
+        Ok(())
+    }
 }
 
 #[derive(Debug, waynest_server::RequestDispatcher)]
 #[waynest(error = crate::error::WaylandError, connection = crate::client::Client)]
 pub struct DataSource {
-	id: ObjectId,
+    id: ObjectId,
 }
 impl WlDataSource for DataSource {
-	type Connection = Client;
+    type Connection = Client;
 
-	async fn offer(
-		&self,
-		_client: &mut Self::Connection,
-		_sender_id: ObjectId,
-		_mime_type: String,
-	) -> WaylandResult<()> {
-		Ok(())
-	}
+    async fn offer(
+        &self,
+        _client: &mut Self::Connection,
+        _sender_id: ObjectId,
+        _mime_type: String,
+    ) -> WaylandResult<()> {
+        Ok(())
+    }
 
-	async fn destroy(
-		&self,
-		client: &mut Self::Connection,
-		_sender_id: ObjectId,
-	) -> WaylandResult<()> {
-		client.remove(self.id);
-		Ok(())
-	}
+    async fn destroy(
+        &self,
+        client: &mut Self::Connection,
+        _sender_id: ObjectId,
+    ) -> WaylandResult<()> {
+        client.remove(self.id);
+        Ok(())
+    }
 
-	async fn set_actions(
-		&self,
-		_client: &mut Self::Connection,
-		_sender_id: ObjectId,
-		_dnd_actions: DndAction,
-	) -> WaylandResult<()> {
-		Ok(())
-	}
+    async fn set_actions(
+        &self,
+        _client: &mut Self::Connection,
+        _sender_id: ObjectId,
+        _dnd_actions: DndAction,
+    ) -> WaylandResult<()> {
+        Ok(())
+    }
 }
 
 #[derive(Debug, waynest_server::RequestDispatcher)]
 #[waynest(error = crate::error::WaylandError, connection = crate::client::Client)]
 pub struct DataDevice;
 impl WlDataDevice for DataDevice {
-	type Connection = Client;
+    type Connection = Client;
 
-	async fn start_drag(
-		&self,
-		_client: &mut Self::Connection,
-		_sender_id: ObjectId,
-		_source: Option<ObjectId>,
-		_origin: ObjectId,
-		_icon: Option<ObjectId>,
-		_serial: u32,
-	) -> WaylandResult<()> {
-		Ok(())
-	}
+    async fn start_drag(
+        &self,
+        _client: &mut Self::Connection,
+        _sender_id: ObjectId,
+        _source: Option<ObjectId>,
+        _origin: ObjectId,
+        _icon: Option<ObjectId>,
+        _serial: u32,
+    ) -> WaylandResult<()> {
+        Ok(())
+    }
 
-	async fn set_selection(
-		&self,
-		_client: &mut Self::Connection,
-		_sender_id: ObjectId,
-		_source: Option<ObjectId>,
-		_serial: u32,
-	) -> WaylandResult<()> {
-		Ok(())
-	}
+    async fn set_selection(
+        &self,
+        _client: &mut Self::Connection,
+        _sender_id: ObjectId,
+        _source: Option<ObjectId>,
+        _serial: u32,
+    ) -> WaylandResult<()> {
+        Ok(())
+    }
 
-	async fn release(
-		&self,
-		_client: &mut Self::Connection,
-		_sender_id: ObjectId,
-	) -> WaylandResult<()> {
-		Ok(())
-	}
+    async fn release(
+        &self,
+        _client: &mut Self::Connection,
+        _sender_id: ObjectId,
+    ) -> WaylandResult<()> {
+        Ok(())
+    }
 }
 
 #[derive(Debug, waynest_server::RequestDispatcher)]
 #[waynest(error = crate::error::WaylandError, connection = crate::client::Client)]
 pub struct DataOffer {
-	id: ObjectId,
+    id: ObjectId,
 }
 impl WlDataOffer for DataOffer {
-	type Connection = Client;
+    type Connection = Client;
 
-	async fn accept(
-		&self,
-		_client: &mut Self::Connection,
-		_sender_id: ObjectId,
-		_serial: u32,
-		_mime_type: Option<String>,
-	) -> WaylandResult<()> {
-		Ok(())
-	}
+    async fn accept(
+        &self,
+        _client: &mut Self::Connection,
+        _sender_id: ObjectId,
+        _serial: u32,
+        _mime_type: Option<String>,
+    ) -> WaylandResult<()> {
+        Ok(())
+    }
 
-	async fn receive(
-		&self,
-		_client: &mut Self::Connection,
-		_sender_id: ObjectId,
-		_mime_type: String,
-		_fd: OwnedFd,
-	) -> WaylandResult<()> {
-		Ok(())
-	}
+    async fn receive(
+        &self,
+        _client: &mut Self::Connection,
+        _sender_id: ObjectId,
+        _mime_type: String,
+        _fd: OwnedFd,
+    ) -> WaylandResult<()> {
+        Ok(())
+    }
 
-	async fn destroy(
-		&self,
-		client: &mut Self::Connection,
-		_sender_id: ObjectId,
-	) -> WaylandResult<()> {
-		client.remove(self.id);
-		Ok(())
-	}
+    async fn destroy(
+        &self,
+        client: &mut Self::Connection,
+        _sender_id: ObjectId,
+    ) -> WaylandResult<()> {
+        client.remove(self.id);
+        Ok(())
+    }
 
-	async fn finish(
-		&self,
-		_client: &mut Self::Connection,
-		_sender_id: ObjectId,
-	) -> WaylandResult<()> {
-		Ok(())
-	}
+    async fn finish(
+        &self,
+        _client: &mut Self::Connection,
+        _sender_id: ObjectId,
+    ) -> WaylandResult<()> {
+        Ok(())
+    }
 
-	async fn set_actions(
-		&self,
-		_client: &mut Self::Connection,
-		_sender_id: ObjectId,
-		_dnd_actions: DndAction,
-		_preferred_action: DndAction,
-	) -> WaylandResult<()> {
-		Ok(())
-	}
+    async fn set_actions(
+        &self,
+        _client: &mut Self::Connection,
+        _sender_id: ObjectId,
+        _dnd_actions: DndAction,
+        _preferred_action: DndAction,
+    ) -> WaylandResult<()> {
+        Ok(())
+    }
 }
