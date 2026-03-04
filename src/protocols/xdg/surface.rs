@@ -168,7 +168,7 @@ impl XdgSurface for Surface {
         };
 
         let child_info = ChildState {
-            id: id,
+            id: *id,
             parent: parent_id.clone(),
             geometry: positioner.data().infinite_geometry(),
             z_order: 1,
@@ -191,9 +191,7 @@ impl XdgSurface for Surface {
             if configured.load(std::sync::atomic::Ordering::SeqCst)
                 && surface.currently_has_valid_buffer()
             {
-                panel_item
-                    .backend
-                    .add_child(&popup.surface.wl_surface, child_info.clone());
+                panel_item.add_child(&popup.surface.wl_surface, child_info.clone());
                 return false;
             }
             true

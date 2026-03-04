@@ -4,12 +4,13 @@ use std::{
     time::Duration,
 };
 
-use stardust_xr_gluon::AbortOnDrop;
+use stardust_xr_fusion::AbortOnDrop;
 use tokio::{net::UnixStream, sync::mpsc};
 use tokio_stream::StreamExt as _;
 use tracing::debug_span;
 use waynest::ObjectId;
-use waynest_server::Listener;
+use waynest_protocols::server::core::wayland::wl_display::WlDisplay as _;
+use waynest_server::{Client as _, Listener};
 
 use crate::{
     client::{Client, Message},
@@ -102,13 +103,14 @@ impl WaylandClient {
                     .map(|exe| exe.to_string())
             })
             .unwrap_or_else(|| "??".to_string());
+        tracing::info!("Wayland client \"{exe_printable}\" connected, pid={pid_printable}");
         let abort_handle = tokio::spawn(
             // || format!("Wayland client \"{exe_printable}\" dispatch, pid={pid_printable}"),
             Self::dispatch_loop(client, message_source),
-        )?
+        )
         .into();
 
-        let abort_handle = tokio::spawn(async {}).into();
+        // let abort_handle = tokio::spawn(async {}).into();
 
         Ok(WaylandClient { abort_handle })
     }

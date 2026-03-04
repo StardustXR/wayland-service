@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use super::surface::WL_SURFACE_REGISTRY;
 use crate::error::{WaylandError, WaylandResult};
 use crate::protocols::core::surface::Surface;
@@ -24,7 +26,7 @@ impl WlCompositor for Compositor {
         if let Some(output) = client.display().output.get() {
             surface.enter(client, id, output.id).await?;
         }
-        WL_SURFACE_REGISTRY.add_raw(&surface);
+        WL_SURFACE_REGISTRY.lock().insert(Arc::downgrade(&surface));
 
         Ok(())
     }

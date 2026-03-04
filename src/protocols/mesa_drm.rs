@@ -47,7 +47,7 @@ impl MesaDrm {
             .map(|f| f.drm_fourcc())
             .collect::<FxHashSet<_>>();
         for format in formats {
-            drm.format(client, id, *format as u32).await?;
+            drm.format(client, id, format as u32).await?;
         }
 
         Ok(drm)

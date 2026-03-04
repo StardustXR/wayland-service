@@ -1,22 +1,17 @@
 use super::toplevel::Toplevel;
 use crate::{
-    core::{Id, error::Result, task},
-    nodes::{
-        drawable::model::ModelPart,
-        items::panel::{
-            Backend, ChildInfo, Geometry, PanelItem, PanelItemInitData, SurfaceId, ToplevelInfo,
-        },
-    },
-    wayland::{
-        Message,
-        core::{
-            seat::{Seat, SeatMessage},
-            surface::Surface,
-        },
+    client::Message,
+    protocols::core::{
+        seat::{Seat, SeatMessage},
+        surface::Surface,
     },
 };
+use binderbinder::TransactionHandler;
 use dashmap::DashMap;
-use mint::Vector2;
+use gluon_wire::GluonDataReader;
+use stardust_xr_panel_item::protocol::{
+    ChildState, Geometry, PanelItemHandler, PanelShell, ScrollSource, SurfaceId,
+};
 use std::sync::Arc;
 use std::sync::Weak;
 use tracing;
@@ -25,15 +20,17 @@ use tracing;
 pub struct XdgBackend {
     seat: Weak<Seat>,
     toplevel: Weak<Toplevel>,
-    pub children: DashMap<Id, (Weak<Surface>, ChildInfo)>,
+    panel_shell: PanelShell,
+    pub children: DashMap<u64, (Weak<Surface>, ChildState)>,
 }
 
 impl XdgBackend {
-    pub fn new(seat: &Arc<Seat>, toplevel: &Arc<Toplevel>) -> Self {
+    pub fn new(seat: &Arc<Seat>, toplevel: &Arc<Toplevel>, panel_shell: PanelShell) -> Self {
         Self {
             seat: Arc::downgrade(seat),
             toplevel: Arc::downgrade(toplevel),
             children: DashMap::new(),
+            panel_shell,
         }
     }
 
@@ -45,48 +42,43 @@ impl XdgBackend {
             .expect("Toplevel should always be valid while XdgBackend exists")
     }
 
-    pub fn panel_item(&self) -> Option<Arc<PanelItem<XdgBackend>>> {
-        self.toplevel().wl_surface().panel_item.lock().upgrade()
+    pub fn panel_shell(&self) -> &PanelShell {
+        &self.panel_shell
     }
 
     fn surface_from_id(&self, id: &SurfaceId) -> Option<Arc<Surface>> {
         match id {
-            SurfaceId::Toplevel(_) => Some(self.toplevel().wl_surface().clone()),
-            SurfaceId::Child(id) => self.children.get(id).as_deref().and_then(|c| c.0.upgrade()),
+            SurfaceId::Toplevel => Some(self.toplevel().wl_surface().clone()),
+            SurfaceId::Child { id } => self.children.get(id).as_deref().and_then(|c| c.0.upgrade()),
         }
     }
 
-    pub fn add_child(&self, surface: &Arc<Surface>, info: ChildInfo) {
-        let Some(SurfaceId::Child(id)) = surface.surface_id.get().cloned() else {
+    pub fn add_child(&self, surface: &Arc<Surface>, info: ChildState) {
+        let Some(SurfaceId::Child { id }) = surface.surface_id.get().cloned() else {
             return;
         };
+        if info.id != id {
+            tracing::warn!("id mismatch between child state and surf");
+        }
         self.children
             .insert(id, (Arc::downgrade(surface), info.clone()));
 
-        let Some(panel_item) = self.panel_item() else {
-            tracing::error!("Couldn't find panel item in add_child");
-            return;
-        };
-        panel_item.create_child(id, &info);
+        self.panel_shell.create_child(info.clone());
     }
 
     pub fn reposition_child(&self, surface: &Arc<Surface>, geometry: Geometry) {
-        let Some(SurfaceId::Child(id)) = surface.surface_id.get() else {
+        let Some(SurfaceId::Child { id }) = surface.surface_id.get() else {
             return;
         };
 
         if let Some(mut child) = self.children.get_mut(id) {
-            child.1.geometry = geometry;
+            child.1.geometry = geometry.clone();
         }
-        let Some(panel_item) = self.panel_item() else {
-            tracing::error!("Couldn't find panel item in reposition_child");
-            return;
-        };
-        panel_item.reposition_child(*id, &geometry);
+        self.panel_shell.move_child(*id, geometry);
     }
 
     pub fn update_child_z_order(&self, surface: &Arc<Surface>, z_order: i32) {
-        let Some(SurfaceId::Child(id)) = surface.surface_id.get() else {
+        let Some(SurfaceId::Child { id }) = surface.surface_id.get() else {
             return;
         };
 
@@ -94,127 +86,34 @@ impl XdgBackend {
             child.1.z_order = z_order;
             let info = child.1.clone();
             drop(child);
-
-            let Some(panel_item) = self.panel_item() else {
-                tracing::error!("Couldn't find panel item in update_child_z_order");
-                return;
-            };
-            panel_item.reposition_child(*id, &info.geometry);
+            // TODO: this seems very wrong, idk if we ever communicate the z order here
+            self.panel_shell.move_child(*id, info.geometry);
         }
     }
 
     pub fn remove_child(&self, surface: &Surface) {
-        let Some(SurfaceId::Child(id)) = surface.surface_id.get() else {
+        let Some(SurfaceId::Child { id }) = surface.surface_id.get() else {
             return;
         };
         self.children.remove(id);
 
-        let Some(panel_item) = self.panel_item() else {
-            tracing::error!("Couldn't find panel item in remove_child");
-            return;
-        };
-        panel_item.destroy_child(*id);
+        self.panel_shell.destroy_child(*id);
     }
 }
-impl Backend for XdgBackend {
-    fn start_data(&self) -> Result<PanelItemInitData> {
-        let top_level = self.toplevel();
-        let surface = top_level.wl_surface();
-        let state_lock = surface.state_lock();
-        let surface_state = state_lock.current();
-
-        let size = surface_state
-            .buffer
-            .as_ref()
-            .map(|b| [b.buffer.size().x as u32, b.buffer.size().y as u32].into())
-            .unwrap_or([0; 2].into());
-        let toplevel = ToplevelInfo {
-            parent: self.toplevel().parent(),
-            title: self.toplevel().title(),
-            app_id: self.toplevel().app_id(),
-            size,
-            min_size: surface_state
-                .min_size
-                .map(|v| [v.x as f32, v.y as f32].into()),
-            max_size: surface_state
-                .max_size
-                .map(|v| [v.x as f32, v.y as f32].into()),
-            logical_rectangle: surface_state.geometry.unwrap_or(Geometry {
-                origin: [0; 2].into(),
-                size,
-            }),
-        };
-
-        Ok(PanelItemInitData {
-            cursor: None,
-            toplevel,
-            children: vec![],
-            pointer_grab: None,
-            keyboard_grab: None,
-        })
+impl PanelItemHandler for XdgBackend {
+    async fn register_xkb_keymap(
+        &self,
+        xkb_keymap: String,
+    ) -> stardust_xr_panel_item::protocol::KeymapId {
+        todo!()
     }
 
-    fn apply_cursor_material(&self, model_part: &Arc<ModelPart>) {
-        let model_part = model_part.clone();
-        let Some(seat) = self.seat.upgrade() else {
-            return;
-        };
-        let _ = task::new(|| "Apply cursor material", async move {
-            let Some(cursor) = seat.cursor_surface().await else {
-                return;
-            };
-            cursor.apply_material(&model_part);
-        });
-    }
-    fn apply_surface_material(&self, surface: SurfaceId, model_part: &Arc<ModelPart>) {
-        if let Some(surface) = self.surface_from_id(&surface) {
-            surface.apply_material(model_part);
-        }
-    }
-
-    fn close_toplevel(&self) {
-        let _ = self
-            .toplevel()
-            .wl_surface()
-            .message_sink
-            .send(Message::CloseToplevel(self.toplevel().clone()));
-    }
-
-    fn auto_size_toplevel(&self) {
-        let _ = self
-            .toplevel()
-            .wl_surface()
-            .message_sink
-            .send(Message::ResizeToplevel {
-                toplevel: self.toplevel().clone(),
-                size: None,
-            });
-    }
-
-    fn set_toplevel_size(&self, size: Vector2<u32>) {
-        let _ = self
-            .toplevel()
-            .wl_surface()
-            .message_sink
-            .send(Message::ResizeToplevel {
-                toplevel: self.toplevel().clone(),
-                size: Some(size),
-            });
-    }
-
-    fn set_toplevel_focused_visuals(&self, focused: bool) {
-        let _ = self
-            .toplevel()
-            .wl_surface()
-            .message_sink
-            .send(Message::SetToplevelVisualActive {
-                toplevel: self.toplevel().clone(),
-                active: focused,
-            });
-    }
-
-    fn absolute_pointer_motion(&self, surface: &SurfaceId, position: Vector2<f32>) {
-        let Some(surface) = self.surface_from_id(surface) else {
+    fn absolute_pointer_motion(
+        &self,
+        surface: SurfaceId,
+        position: stardust_xr_panel_item::protocol::Vec2,
+    ) {
+        let Some(surface) = self.surface_from_id(&surface) else {
             return;
         };
         let _ = self
@@ -223,20 +122,26 @@ impl Backend for XdgBackend {
             .message_sink
             .send(Message::Seat(SeatMessage::AbsolutePointerMotion {
                 surface,
-                position,
+                position: position.into(),
             }));
     }
 
-    fn relative_pointer_motion(&self, _surface: &SurfaceId, delta: Vector2<f32>) {
+    fn relative_pointer_motion(
+        &self,
+        surface: SurfaceId,
+        delta: stardust_xr_panel_item::protocol::Vec2,
+    ) {
         let _ = self
             .toplevel()
             .wl_surface()
             .message_sink
-            .send(Message::Seat(SeatMessage::RelativePointerMotion { delta }));
+            .send(Message::Seat(SeatMessage::RelativePointerMotion {
+                delta: delta.into(),
+            }));
     }
 
-    fn pointer_button(&self, surface: &SurfaceId, button: u32, pressed: bool) {
-        if let Some(surface) = self.surface_from_id(surface) {
+    fn pointer_button(&self, surface: SurfaceId, button: u32, pressed: bool) {
+        if let Some(surface) = self.surface_from_id(&surface) {
             let _ = self
                 .toplevel()
                 .wl_surface()
@@ -249,53 +154,93 @@ impl Backend for XdgBackend {
         }
     }
 
-    fn pointer_scroll(
+    fn pointer_scroll_discrete(
         &self,
-        surface: &SurfaceId,
-        scroll_distance: Option<Vector2<f32>>,
-        scroll_steps: Option<Vector2<f32>>,
+        surface: SurfaceId,
+        delta: stardust_xr_panel_item::protocol::Vec2,
+        source: ScrollSource,
     ) {
-        if let Some(surface) = self.surface_from_id(surface) {
+        if let Some(surface) = self.surface_from_id(&surface) {
             let _ = self
                 .toplevel()
                 .wl_surface()
                 .message_sink
-                .send(Message::Seat(SeatMessage::PointerScroll {
+                .send(Message::Seat(SeatMessage::PointerScrollDiscrete {
                     surface,
-                    scroll_distance,
-                    scroll_steps,
+                    delta: delta.into(),
+                    source,
                 }));
         }
     }
 
-    fn keyboard_key(&self, surface: &SurfaceId, keymap_id: Id, key: u32, pressed: bool) {
+    fn pointer_scroll_pixels(
+        &self,
+        surface: SurfaceId,
+        delta: stardust_xr_panel_item::protocol::Vec2,
+        source: ScrollSource,
+    ) {
+        if let Some(surface) = self.surface_from_id(&surface) {
+            let _ = self
+                .toplevel()
+                .wl_surface()
+                .message_sink
+                .send(Message::Seat(SeatMessage::PointerScrollDiscrete {
+                    surface,
+                    delta: delta.into(),
+                    source,
+                }));
+        }
+    }
+
+    fn pointer_scroll_stop(&self, surface: SurfaceId) {
+        if let Some(surface) = self.surface_from_id(&surface) {
+            let _ = self
+                .toplevel()
+                .wl_surface()
+                .message_sink
+                .send(Message::Seat(SeatMessage::PointerScrollStop { surface }));
+        }
+    }
+
+    fn key(
+        &self,
+        surface: SurfaceId,
+        keymap: stardust_xr_panel_item::protocol::KeymapId,
+        key: u32,
+        pressed: bool,
+    ) {
         tracing::debug!(
             "Backend: Keyboard key {} {}",
             key,
             if pressed { "pressed" } else { "released" }
         );
-        if let Some(surface) = self.surface_from_id(surface) {
+        if let Some(surface) = self.surface_from_id(&surface) {
             let _ = self
                 .toplevel()
                 .wl_surface()
                 .message_sink
                 .send(Message::Seat(SeatMessage::KeyboardKey {
                     surface,
-                    keymap_id,
+                    keymap_id: keymap.id,
                     key,
                     pressed,
                 }));
         }
     }
 
-    fn touch_down(&self, surface: &SurfaceId, id: u32, position: Vector2<f32>) {
+    fn touch_down(
+        &self,
+        surface: SurfaceId,
+        id: u32,
+        position: stardust_xr_panel_item::protocol::Vec2,
+    ) {
         tracing::debug!(
             "Backend: Touch down {} at ({}, {})",
             id,
             position.x,
             position.y
         );
-        if let Some(surface) = self.surface_from_id(surface) {
+        if let Some(surface) = self.surface_from_id(&surface) {
             let _ = self
                 .toplevel()
                 .wl_surface()
@@ -303,12 +248,17 @@ impl Backend for XdgBackend {
                 .send(Message::Seat(SeatMessage::TouchDown {
                     surface,
                     id,
-                    position,
+                    position: position.into(),
                 }));
         }
     }
 
-    fn touch_move(&self, id: u32, position: Vector2<f32>) {
+    fn touch_move(
+        &self,
+        surface: SurfaceId,
+        id: u32,
+        position: stardust_xr_panel_item::protocol::Vec2,
+    ) {
         tracing::debug!(
             "Backend: Touch move {} to ({}, {})",
             id,
@@ -319,10 +269,18 @@ impl Backend for XdgBackend {
         let _ = toplevel
             .wl_surface()
             .message_sink
-            .send(Message::Seat(SeatMessage::TouchMove { id, position }));
+            .send(Message::Seat(SeatMessage::TouchMove {
+                id,
+                position: position.into(),
+            }));
     }
 
-    fn touch_up(&self, id: u32) {
+    fn touch_up(
+        &self,
+        surface: SurfaceId,
+        id: u32,
+        position: stardust_xr_panel_item::protocol::Vec2,
+    ) {
         tracing::debug!("Backend: Touch up {}", id);
         let toplevel = self.toplevel();
         let _ = toplevel
@@ -331,6 +289,85 @@ impl Backend for XdgBackend {
             .send(Message::Seat(SeatMessage::TouchUp { id }));
     }
 
+    fn close_toplevel(&self) {
+        let _ = self
+            .toplevel()
+            .wl_surface()
+            .message_sink
+            .send(Message::CloseToplevel(self.toplevel().clone()));
+    }
+
+    fn resize_toplevel_to_app_request(&self) {
+        let _ = self
+            .toplevel()
+            .wl_surface()
+            .message_sink
+            .send(Message::ResizeToplevel {
+                toplevel: self.toplevel().clone(),
+                size: None,
+            });
+    }
+
+    fn request_toplevel_resize(&self, new_size: stardust_xr_panel_item::protocol::UVec2) {
+        let _ = self
+            .toplevel()
+            .wl_surface()
+            .message_sink
+            .send(Message::ResizeToplevel {
+                toplevel: self.toplevel().clone(),
+                size: Some(new_size.into()),
+            });
+    }
+
+    fn toplevel_focused(&self, focused: bool) {
+        let _ = self
+            .toplevel()
+            .wl_surface()
+            .message_sink
+            .send(Message::SetToplevelVisualActive {
+                toplevel: self.toplevel().clone(),
+                active: focused,
+            });
+    }
+}
+impl XdgBackend {
+    // fn start_data(&self) -> Result<PanelItemInitData> {
+    //     let top_level = self.toplevel();
+    //     let surface = top_level.wl_surface();
+    //     let state_lock = surface.state_lock();
+    //     let surface_state = state_lock.current();
+    //
+    //     let size = surface_state
+    //         .buffer
+    //         .as_ref()
+    //         .map(|b| [b.buffer.size().x as u32, b.buffer.size().y as u32].into())
+    //         .unwrap_or([0; 2].into());
+    //     let toplevel = ToplevelInfo {
+    //         parent: self.toplevel().parent(),
+    //         title: self.toplevel().title(),
+    //         app_id: self.toplevel().app_id(),
+    //         size,
+    //         min_size: surface_state
+    //             .min_size
+    //             .map(|v| [v.x as f32, v.y as f32].into()),
+    //         max_size: surface_state
+    //             .max_size
+    //             .map(|v| [v.x as f32, v.y as f32].into()),
+    //         logical_rectangle: surface_state.geometry.unwrap_or(Geometry {
+    //             origin: [0; 2].into(),
+    //             size,
+    //         }),
+    //     };
+    //
+    //     Ok(ToplevelState {
+    //         cursor: None,
+    //         toplevel,
+    //         children: vec![],
+    //         pointer_grab: None,
+    //         keyboard_grab: None,
+    //     })
+    // }
+
     fn reset_input(&self) {
         tracing::debug!("Backend: Reset input");
         let toplevel = self.toplevel();
@@ -338,5 +375,21 @@ impl Backend for XdgBackend {
             .wl_surface()
             .message_sink
             .send(Message::Seat(SeatMessage::Reset));
+    }
+}
+impl TransactionHandler for XdgBackend {
+    async fn handle(
+        &self,
+        transaction: binderbinder::device::Transaction,
+    ) -> binderbinder::payload::PayloadBuilder<'_> {
+        let data = GluonDataReader::from_payload(transaction.payload);
+        self.dispatch_two_way(transaction.code, &mut data)
+            .await
+            .to_payload()
+    }
+
+    async fn handle_one_way(&self, transaction: binderbinder::device::Transaction) {
+        let data = GluonDataReader::from_payload(transaction.payload);
+        self.dispatch_one_way(transaction.code, &mut data).await
     }
 }

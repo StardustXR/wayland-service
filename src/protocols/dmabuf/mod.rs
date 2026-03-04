@@ -43,9 +43,9 @@ impl Dmabuf {
         let formats = DmatexFormat::enumerate(sd_client, &vk.render_dev)
             .await
             .unwrap()
-            .into_values()
+            .values()
             // we really need something more efficient than this lol
-            .filter(|f| format!("{}", f.vk_format()).contains("SRGB"))
+            .filter(|f| format!("{:?}", f.vk_format()).contains("SRGB"))
             .flat_map(|f| f.variants().iter().map(|v| (f.drm_fourcc(), v.modifier)))
             .collect();
         let dmabuf = Self { version, formats };
@@ -68,11 +68,6 @@ impl Dmabuf {
         }
 
         Ok(dmabuf)
-    }
-
-    /// Remove a buffer parameters object from tracking
-    pub(crate) fn remove_params(&self, params_id: ObjectId) {
-        self.active_params.retain(|params| params.id != params_id);
     }
 }
 

@@ -1,14 +1,14 @@
-use crate::wayland::WaylandResult;
+use crate::error::WaylandResult;
 use waynest::Fixed;
 use waynest::ObjectId;
-pub use waynest_protocols::server::stable::viewporter::wp_viewport::*;
-pub use waynest_protocols::server::stable::viewporter::wp_viewporter::*;
+use waynest_protocols::server::stable::viewporter::wp_viewport::*;
+use waynest_protocols::server::stable::viewporter::wp_viewporter::*;
 use waynest_server::Client as _;
 
 // This is a barebones/stub no-op implementation of wp_viewporter to make xwayland apps work
 
 #[derive(Debug, waynest_server::RequestDispatcher)]
-#[waynest(error = crate::wayland::WaylandError, connection = crate::wayland::Client)]
+#[waynest(error = crate::error::WaylandError, connection = crate::client::Client)]
 pub struct Viewporter {
     id: ObjectId,
 }
@@ -20,7 +20,7 @@ impl Viewporter {
 }
 
 impl WpViewporter for Viewporter {
-    type Connection = crate::wayland::Client;
+    type Connection = crate::client::Client;
 
     async fn destroy(
         &self,
@@ -45,7 +45,7 @@ impl WpViewporter for Viewporter {
 }
 
 #[derive(Debug, waynest_server::RequestDispatcher)]
-#[waynest(error = crate::wayland::WaylandError, connection = crate::wayland::Client)]
+#[waynest(error = crate::error::WaylandError, connection = crate::client::Client)]
 pub struct Viewport {
     id: ObjectId,
     _surface_id: ObjectId,
@@ -61,7 +61,7 @@ impl Viewport {
 }
 
 impl WpViewport for Viewport {
-    type Connection = crate::wayland::Client;
+    type Connection = crate::client::Client;
 
     async fn destroy(
         &self,

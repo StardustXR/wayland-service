@@ -1,12 +1,16 @@
+use crate::{
+    error::{WaylandError, WaylandResult},
+    protocols::xdg::surface::Surface,
+};
+
 use super::positioner::Positioner;
-use crate::wayland::{WaylandError, WaylandResult, util::ClientExt, xdg::surface::Surface};
 
 use waynest::ObjectId;
 pub use waynest_protocols::server::stable::xdg_shell::xdg_wm_base::*;
 use waynest_server::Client as _;
 
 #[derive(Debug, waynest_server::RequestDispatcher)]
-#[waynest(error = crate::wayland::WaylandError, connection = crate::wayland::Client)]
+#[waynest(error = crate::error::WaylandError, connection = crate::client::Client)]
 pub struct WmBase {
     version: u32,
     id: ObjectId,
@@ -17,7 +21,7 @@ impl WmBase {
     }
 }
 impl XdgWmBase for WmBase {
-    type Connection = crate::wayland::Client;
+    type Connection = crate::client::Client;
 
     async fn destroy(
         &self,
@@ -45,7 +49,7 @@ impl XdgWmBase for WmBase {
         xdg_surface_id: ObjectId,
         wl_surface_id: ObjectId,
     ) -> WaylandResult<()> {
-        let wl_surface = client.try_get::<crate::wayland::core::surface::Surface>(wl_surface_id)?;
+        let wl_surface = client.try_get::<crate::protocols::core::surface::Surface>(wl_surface_id)?;
         match wl_surface.role.get() {
             None => (),
             Some(_) => {

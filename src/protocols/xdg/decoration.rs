@@ -1,4 +1,4 @@
-use crate::wayland::{Client, WaylandResult};
+use crate::{client::Client, error::WaylandResult};
 use waynest::ObjectId;
 use waynest_protocols::server::unstable::xdg_decoration_unstable_v1::{
     zxdg_decoration_manager_v1::*, zxdg_toplevel_decoration_v1::*,
@@ -6,7 +6,7 @@ use waynest_protocols::server::unstable::xdg_decoration_unstable_v1::{
 use waynest_server::Client as _;
 
 #[derive(Debug, waynest_server::RequestDispatcher)]
-#[waynest(error = crate::wayland::WaylandError, connection = crate::wayland::Client)]
+#[waynest(error = crate::error::WaylandError, connection = crate::client::Client)]
 pub struct XdgDecorationManager {
     pub _version: u32,
     pub id: ObjectId,
@@ -36,7 +36,7 @@ impl ZxdgDecorationManagerV1 for XdgDecorationManager {
 }
 
 #[derive(Debug, waynest_server::RequestDispatcher)]
-#[waynest(error = crate::wayland::WaylandError, connection = crate::wayland::Client)]
+#[waynest(error = crate::error::WaylandError, connection = crate::client::Client)]
 pub struct XdgDecoration {
     id: ObjectId,
 }

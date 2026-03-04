@@ -1,10 +1,11 @@
 #![allow(unused)]
 
+use parking_lot::Mutex;
 use std::{
     fmt::Debug,
     io,
     sync::{
-        Arc, Mutex, Weak,
+        Arc, Weak,
         atomic::{AtomicU32, Ordering},
     },
 };
@@ -17,13 +18,8 @@ use crate::{
     client::{Client, MessageSink},
     display::Display,
     error::{WaylandError, WaylandResult},
+    protocols::core::surface::Surface,
 };
-struct Surface;
-impl Surface {
-    fn get_state_buffer_manager(&self) -> Arc<SurfaceCommitAwareBufferManager> {
-        todo!()
-    }
-}
 
 impl Client {
     pub fn message_sink(&self) -> MessageSink {
@@ -76,7 +72,7 @@ impl SurfaceCommitAwareBufferManager {
     }
     pub fn update_current(&self) {
         info!("pre lock");
-        let mut lock = self.registry.lock().unwrap();
+        let mut lock = self.registry.lock();
         info!("post lock");
         lock.retain(|v| v.valid());
         lock.iter().for_each(|v| v.update_current());
@@ -103,7 +99,7 @@ impl<State: BufferedState> SurfaceCommitAwareBufferFns
 
     fn update_current(&self) {
         if let Some(v) = self.upgrade() {
-            v.lock().unwrap().update_current();
+            v.lock().update_current();
         };
     }
 }
@@ -135,7 +131,6 @@ impl<State: BufferedState> SurfaceCommitAwareBuffer<State> {
         buffer_manager
             .registry
             .lock()
-            .unwrap()
             .push(Box::new(Arc::downgrade(&v)));
 
         v

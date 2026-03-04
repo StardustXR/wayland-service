@@ -1,5 +1,5 @@
-use crate::wayland::WaylandResult;
-use crate::wayland::core::surface::Surface;
+use crate::error::WaylandResult;
+use crate::protocols::core::surface::Surface;
 use rustix::fs::Timespec;
 use waynest::ObjectId;
 use waynest_protocols::server::stable::presentation_time::{
@@ -34,7 +34,7 @@ impl From<Timespec> for MonotonicTimestamp {
 }
 
 #[derive(Debug, waynest_server::RequestDispatcher)]
-#[waynest(error = crate::wayland::WaylandError, connection = crate::wayland::Client)]
+#[waynest(error = crate::error::WaylandError, connection = crate::client::Client)]
 pub struct Presentation {
     id: ObjectId,
 }
@@ -44,7 +44,7 @@ impl Presentation {
     }
 }
 impl WpPresentation for Presentation {
-    type Connection = crate::wayland::Client;
+    type Connection = crate::client::Client;
 
     async fn destroy(
         &self,
@@ -74,8 +74,8 @@ impl WpPresentation for Presentation {
 }
 
 #[derive(Debug, waynest_server::RequestDispatcher)]
-#[waynest(error = crate::wayland::WaylandError, connection = crate::wayland::Client)]
+#[waynest(error = crate::error::WaylandError, connection = crate::client::Client)]
 pub struct PresentationFeedback(pub ObjectId);
 impl WpPresentationFeedback for PresentationFeedback {
-    type Connection = crate::wayland::Client;
+    type Connection = crate::client::Client;
 }

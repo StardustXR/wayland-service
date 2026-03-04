@@ -1,5 +1,6 @@
 use dashmap::{DashMap, DashSet};
 use memfd::MemfdOptions;
+use parking_lot::Mutex;
 use slotmap::{DefaultKey, KeyData, SlotMap};
 use std::{
     collections::HashSet,
@@ -8,7 +9,7 @@ use std::{
         fd::{AsFd, IntoRawFd},
         unix::io::{FromRawFd, OwnedFd},
     },
-    sync::{Arc, LazyLock, Mutex, Weak},
+    sync::{Arc, LazyLock, Weak},
 };
 use waynest::ObjectId;
 pub use waynest_protocols::server::core::wayland::wl_keyboard::*;
@@ -124,10 +125,10 @@ impl Keyboard {
     ) -> WaylandResult<()> {
         // KEYMAP UPDATES
         {
-            let mut old_keymap_id = self.current_keymap_id.lock().await;
+            let mut old_keymap_id = self.current_keymap_id.lock();
 
             if *old_keymap_id != keymap_id {
-                let keymap_key = DefaultKey::from(KeyData::from_ffi(keymap_id.0));
+                let keymap_key = DefaultKey::from(KeyData::from_ffi(keymap_id));
 
                 // Get keymap data and drop the lock immediately
                 let keymap_data = {
@@ -154,8 +155,8 @@ impl Keyboard {
         // println!("pressed keys: {:?}", &*pressed_keys);
 
         // FOCUS UPDATES
-        let mut focused = self.focused_surface.lock().await;
-        let mut modifier_state = self.modifier_state.lock().await;
+        let mut focused = self.focused_surface.lock();
+        let mut modifier_state = self.modifier_state.lock();
 
         let refocus = focused.as_ptr() != Arc::as_ptr(&surface);
         // If we're entering a new surface
@@ -236,7 +237,7 @@ impl Keyboard {
     }
 
     pub async fn reset(&self, client: &mut Client) -> WaylandResult<()> {
-        let mut modifier_state = self.modifier_state.lock().await;
+        let mut modifier_state = self.modifier_state.lock();
         modifier_state.pressed_keys.clear();
         modifier_state.mods_depressed = 0;
         modifier_state.mods_latched = 0;

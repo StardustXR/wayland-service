@@ -2,17 +2,17 @@ use super::{
     positioner::{Positioner, PositionerData},
     surface::Surface,
 };
-use crate::wayland::WaylandResult;
-use crate::{core::Id, nodes::items::panel::SurfaceId};
+use crate::error::WaylandResult;
 use parking_lot::Mutex;
-use rand::Rng;
+use rand::random;
+use stardust_xr_panel_item::protocol::SurfaceId;
 use std::sync::Arc;
 use waynest::ObjectId;
 use waynest_protocols::server::stable::xdg_shell::xdg_popup::XdgPopup;
 use waynest_server::Client as _;
 
 #[derive(Debug, waynest_server::RequestDispatcher)]
-#[waynest(error = crate::wayland::WaylandError, connection = crate::wayland::Client)]
+#[waynest(error = crate::error::WaylandError, connection = crate::client::Client)]
 pub struct Popup {
     version: u32,
     pub surface: Arc<Surface>,
@@ -21,10 +21,9 @@ pub struct Popup {
 }
 impl Popup {
     pub fn new(version: u32, surface: Arc<Surface>, positioner: &Positioner, id: ObjectId) -> Self {
-        let _ = surface
-            .wl_surface
-            .surface_id
-            .set(SurfaceId::Child(Id(rand::rng().random())));
+        let _ = surface.wl_surface.surface_id.set(SurfaceId::Child {
+            id: random(),
+        });
 
         let positioner_data = positioner.data();
         Self {
@@ -36,7 +35,7 @@ impl Popup {
     }
 }
 impl XdgPopup for Popup {
-    type Connection = crate::wayland::Client;
+    type Connection = crate::client::Client;
 
     /// https://wayland.app/protocols/xdg-shell#xdg_popup:request:grab
     async fn grab(
@@ -78,9 +77,7 @@ impl XdgPopup for Popup {
         let Some(panel_item) = self.surface.wl_surface.panel_item.lock().upgrade() else {
             return Ok(());
         };
-        panel_item
-            .backend
-            .reposition_child(&self.surface.wl_surface, geometry);
+        panel_item.reposition_child(&self.surface.wl_surface, geometry);
         Ok(())
     }
 
@@ -99,6 +96,6 @@ impl Drop for Popup {
         let Some(panel_item) = self.surface.wl_surface.panel_item.lock().upgrade() else {
             return;
         };
-        panel_item.backend.remove_child(&self.surface.wl_surface);
+        panel_item.remove_child(&self.surface.wl_surface);
     }
 }

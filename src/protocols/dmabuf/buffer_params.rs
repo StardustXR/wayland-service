@@ -101,7 +101,8 @@ impl ZwpLinuxBufferParamsV1 for BufferParams {
         if modifier != stored_modifier {
             tracing::error!(
                 "used differing modifers for dmabuf backing planes, previous modifier: {:x}, new modifier: {:x}",
-                stored_modifier, modifier
+                stored_modifier,
+                modifier
             );
             return Err(WaylandError::Fatal {
                 object_id: self.id,
@@ -134,6 +135,7 @@ impl ZwpLinuxBufferParamsV1 for BufferParams {
             DrmFourcc::try_from(format).unwrap(),
             flags,
         )
+        .await
         .inspect_err(|e| tracing::error!("Failed to import dmabuf because {e}"))
         .map(|backing| {
             let id = client.display().next_server_id();
@@ -166,7 +168,9 @@ impl ZwpLinuxBufferParamsV1 for BufferParams {
             [width as u32, height as u32].into(),
             DrmFourcc::try_from(format).unwrap(),
             flags,
-        ) {
+        )
+        .await
+        {
             Ok(backing) => {
                 Buffer::new(client, buffer_id, BufferBacking::Dmabuf(backing))?;
             }

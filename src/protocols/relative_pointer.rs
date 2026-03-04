@@ -1,4 +1,3 @@
-use crate::wayland::{WaylandError, WaylandResult, core::pointer::Pointer};
 use mint::Vector2;
 use std::sync::Arc;
 use waynest::ObjectId;
@@ -7,11 +6,13 @@ use waynest_protocols::server::unstable::relative_pointer_unstable_v1::{
 };
 use waynest_server::Client as _;
 
+use crate::{error::{WaylandError, WaylandResult}, protocols::core::pointer::Pointer};
+
 #[derive(Debug, waynest_server::RequestDispatcher)]
-#[waynest(error = crate::wayland::WaylandError, connection = crate::wayland::Client)]
+#[waynest(error = crate::error::WaylandError, connection = crate::client::Client)]
 pub struct RelativePointerManager(pub ObjectId);
 impl ZwpRelativePointerManagerV1 for RelativePointerManager {
-    type Connection = crate::wayland::Client;
+    type Connection = crate::client::Client;
 
     async fn destroy(
         &self,
@@ -42,12 +43,12 @@ impl ZwpRelativePointerManagerV1 for RelativePointerManager {
 }
 
 #[derive(Debug, waynest_server::RequestDispatcher)]
-#[waynest(error = crate::wayland::WaylandError, connection = crate::wayland::Client)]
+#[waynest(error = crate::error::WaylandError, connection = crate::client::Client)]
 pub struct RelativePointer(pub ObjectId);
 impl RelativePointer {
     pub async fn send_relative_motion(
         &self,
-        client: &mut crate::wayland::Client,
+        client: &mut crate::client::Client,
         delta: Vector2<f32>,
     ) -> WaylandResult<()> {
         self.relative_motion(
@@ -64,7 +65,7 @@ impl RelativePointer {
     }
 }
 impl ZwpRelativePointerV1 for RelativePointer {
-    type Connection = crate::wayland::Client;
+    type Connection = crate::client::Client;
 
     async fn destroy(
         &self,

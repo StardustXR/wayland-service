@@ -2,7 +2,7 @@ use super::surface::SurfaceRole;
 use crate::protocols::{core::surface::Surface, relative_pointer::RelativePointer};
 use crate::{client::Client, error::WaylandResult};
 use mint::Vector2;
-use stardust_xr_panel_item::protocol::Geometry;
+use stardust_xr_panel_item::protocol::{Geometry, ScrollSource};
 use std::sync::Arc;
 use std::sync::Weak;
 use tokio::sync::{Mutex, RwLock};
@@ -140,62 +140,93 @@ impl Pointer {
         .await?;
         self.frame(client, self.id).await
     }
-    pub async fn handle_pointer_scroll(
+    pub async fn handle_pointer_scroll_discrete(
         &self,
         client: &mut Client,
         _surface: Arc<Surface>,
-        scroll_distance: Option<Vector2<f32>>,
-        scroll_steps: Option<Vector2<f32>>,
+        delta: Vector2<f32>,
+        source: ScrollSource,
     ) -> WaylandResult<()> {
-        tracing::debug!(
-            "Handling pointer scroll: distance={:?}, steps={:?}",
-            scroll_distance,
-            scroll_steps
-        );
-        if let Some(distance) = scroll_distance {
-            self.axis(
-                client,
-                self.id,
-                0, // time
-                Axis::HorizontalScroll,
-                (distance.x as f64).into(),
-            )
-            .await?;
-            self.axis(
-                client,
-                self.id,
-                0, // time
-                Axis::VerticalScroll,
-                (distance.y as f64).into(),
-            )
-            .await?;
-        }
-        if self.version < 8
-            && self.version >= 5
-            && let Some(steps) = scroll_steps
-        {
-            self.axis_discrete(client, self.id, Axis::HorizontalScroll, steps.x as i32)
+        tracing::debug!("Handling discrete pointer scroll: steps={:?}", delta);
+        if self.version < 8 && self.version >= 5 {
+            self.axis_discrete(client, self.id, Axis::HorizontalScroll, delta.x as i32)
                 .await?;
-            self.axis_discrete(client, self.id, Axis::VerticalScroll, steps.y as i32)
+            self.axis_discrete(client, self.id, Axis::VerticalScroll, delta.y as i32)
                 .await?;
         }
-        if self.version >= 8
-            && let Some(steps) = scroll_steps
-        {
+        if self.version >= 8 {
             self.axis_value120(
                 client,
                 self.id,
                 Axis::HorizontalScroll,
-                (steps.x * 120.) as i32,
+                (delta.x * 120.) as i32,
             )
             .await?;
             self.axis_value120(
                 client,
                 self.id,
                 Axis::VerticalScroll,
-                (steps.y * 120.) as i32,
+                (delta.y * 120.) as i32,
             )
             .await?;
+        }
+        if self.version >= 5 {
+            self.frame(client, self.id).await?;
+        }
+        Ok(())
+    }
+    pub async fn handle_pointer_scroll_pixels(
+        &self,
+        client: &mut Client,
+        _surface: Arc<Surface>,
+        delta: Vector2<f32>,
+        source: ScrollSource,
+    ) -> WaylandResult<()> {
+        tracing::debug!("Handling pointer smooth scroll: distance={:?}", delta,);
+        if self.version >= 5 {
+            self.axis_source(
+                client,
+                self.id,
+                match source {
+                    ScrollSource::Wheel => AxisSource::Wheel,
+                    ScrollSource::Touch => AxisSource::Finger,
+                    ScrollSource::Continuous => AxisSource::Continuous,
+                    ScrollSource::WheelTilt => AxisSource::WheelTilt,
+                },
+            )
+            .await?;
+        }
+        self.axis(
+            client,
+            self.id,
+            0, // time
+            Axis::HorizontalScroll,
+            (delta.x as f64).into(),
+        )
+        .await?;
+        self.axis(
+            client,
+            self.id,
+            0, // time
+            Axis::VerticalScroll,
+            (delta.y as f64).into(),
+        )
+        .await?;
+        if self.version >= 5 {
+            self.frame(client, self.id).await?;
+        }
+        Ok(())
+    }
+    pub async fn handle_pointer_scroll_stop(
+        &self,
+        client: &mut Client,
+        _surface: Arc<Surface>,
+    ) -> WaylandResult<()> {
+        if self.version >= 5 {
+            self.axis_stop(client, self.id, 0, Axis::HorizontalScroll)
+                .await?;
+            self.axis_stop(client, self.id, 0, Axis::VerticalScroll)
+                .await?;
         }
         if self.version >= 5 {
             self.frame(client, self.id).await?;
@@ -235,13 +266,15 @@ impl WlPointer for Pointer {
         if let Some(focused_surface) = self.focused_surface.lock().await.upgrade()
             && let Some(panel_item) = focused_surface.panel_item.lock().upgrade()
         {
-            panel_item.set_cursor(surface.and_then(|s| client.get::<Surface>(s)).map(|s| {
-                let size = s.current_buffer_size().unwrap_or([16; 2].into());
-                Geometry {
-                    origin: Vector2::from([hotspot_x, hotspot_y]).into(),
-                    size: Vector2::from([size.x as u32, size.y as u32]).into(),
-                }
-            }));
+            panel_item.panel_shell().set_cursor_visuals(
+                surface.and_then(|s| client.get::<Surface>(s)).map(|s| {
+                    let size = s.current_buffer_size().unwrap_or([16; 2].into());
+                    Geometry {
+                        origin: Vector2::from([hotspot_x, hotspot_y]).into(),
+                        size: Vector2::from([size.x as u32, size.y as u32]).into(),
+                    }
+                }),
+            );
         }
         let Some(surface) = surface else {
             return Ok(());

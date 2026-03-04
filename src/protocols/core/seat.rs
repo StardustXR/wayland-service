@@ -4,6 +4,7 @@ use crate::protocols::core::{
     keyboard::Keyboard, pointer::Pointer, surface::Surface, touch::Touch,
 };
 use mint::Vector2;
+use stardust_xr_panel_item::protocol::ScrollSource;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use waynest::ObjectId;
@@ -24,10 +25,18 @@ pub enum SeatMessage {
         button: u32,
         pressed: bool,
     },
-    PointerScroll {
+    PointerScrollDiscrete {
         surface: Arc<Surface>,
-        scroll_distance: Option<Vector2<f32>>,
-        scroll_steps: Option<Vector2<f32>>,
+        delta: Vector2<f32>,
+        source: ScrollSource,
+    },
+    PointerScrollPixels {
+        surface: Arc<Surface>,
+        delta: Vector2<f32>,
+        source: ScrollSource,
+    },
+    PointerScrollStop {
+        surface: Arc<Surface>,
     },
     KeyboardKey {
         surface: Arc<Surface>,
@@ -111,15 +120,31 @@ impl Seat {
                         .await?;
                 }
             }
-            SeatMessage::PointerScroll {
+            SeatMessage::PointerScrollDiscrete {
                 surface,
-                scroll_distance,
-                scroll_steps,
+                delta,
+                source,
             } => {
                 if let Some(pointer) = self.pointer.get() {
                     pointer
-                        .handle_pointer_scroll(client, surface, scroll_distance, scroll_steps)
+                        .handle_pointer_scroll_discrete(client, surface, delta, source)
                         .await?;
+                }
+            }
+            SeatMessage::PointerScrollPixels {
+                surface,
+                delta,
+                source,
+            } => {
+                if let Some(pointer) = self.pointer.get() {
+                    pointer
+                        .handle_pointer_scroll_pixels(client, surface, delta, source)
+                        .await?;
+                }
+            }
+            SeatMessage::PointerScrollStop { surface } => {
+                if let Some(pointer) = self.pointer.get() {
+                    pointer.handle_pointer_scroll_stop(client, surface).await?;
                 }
             }
             SeatMessage::KeyboardKey {

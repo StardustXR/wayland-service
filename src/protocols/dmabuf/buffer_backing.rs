@@ -16,28 +16,20 @@ use std::{
     },
 };
 use timeline_syncobj::timeline_syncobj::TimelineSyncObj;
+use tokio::io::unix::AsyncFd;
 use waynest_protocols::server::stable::linux_dmabuf_v1::zwp_linux_buffer_params_v1::Flags;
 
 /// Parameters for a shared memory buffer
+#[derive(Debug)]
 pub struct DmabufBacking {
     size: Vector2<u32>,
     format: DrmFourcc,
     modifier: u64,
-    timeline: TimelineSyncObj,
-    fds: Arc<Vec<OwnedFd>>,
+    timeline: Arc<TimelineSyncObj>,
+    fds: Arc<Vec<AsyncFd<OwnedFd>>>,
     dmatex_id: u64,
     dmatex_uid: u64,
     next_acquire_point: AtomicU64,
-}
-
-impl std::fmt::Debug for DmabufBacking {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("DmabufBacking")
-            .field("size", &self.size)
-            .field("format", &self.format)
-            .field("tex", &self.tex)
-            .finish()
-    }
 }
 
 impl DmabufBacking {
@@ -51,8 +43,10 @@ impl DmabufBacking {
         let client = CLIENT.wait();
         let vk = VK.wait();
         let dmatex_id = random();
-        let timeline = TimelineSyncObj::create(vk.render_dev.drm_node())
-            .map_err(DmatexImportError::TimelineCreationError)?;
+        let timeline = Arc::new(
+            TimelineSyncObj::create(vk.render_dev.drm_node())
+                .map_err(DmatexImportError::TimelineCreationError)?,
+        );
         drawable::import_dmatex(
             client,
             dmatex_id,
@@ -76,6 +70,7 @@ impl DmabufBacking {
                 v.dmabuf_fd
                     .0
                     .try_clone()
+                    .map(|fd| AsyncFd::new(fd).unwrap())
                     .map_err(DmatexImportError::DmabufFdCloneError)
             })
             .collect::<Result<Vec<_>, _>>()?
@@ -97,18 +92,31 @@ impl DmabufBacking {
         params: Arc<BufferParams>,
         size: Vector2<u32>,
         format: DrmFourcc,
-        flags: Flags,
+        _flags: Flags,
     ) -> Result<Self, DmatexImportError> {
         let mut planes = Vec::from_iter(std::mem::take(&mut *params.planes.lock()));
         planes.sort_by_key(|(index, _)| *index);
         let planes = planes.into_iter().map(|(_, tex)| tex).collect::<Vec<_>>();
         let modifier = *params.modifier.get().ok_or(DmatexImportError::NoModifier)?;
-        Self::new(planes, modifier, size, format)
+        Self::new(planes, modifier, size, format).await
     }
 
-    pub fn update(&self) {
+    pub fn update(&self) -> (u64, u64, u64) {
         let acquire = self.next_acquire_point.fetch_add(1, Ordering::Relaxed);
         let release = self.next_acquire_point.fetch_add(1, Ordering::Relaxed);
+        tokio::spawn({
+            let fds = self.fds.clone();
+            let timeline = self.timeline.clone();
+            async move {
+                for fd in fds.iter() {
+                    _ = fd.readable().await;
+                }
+                unsafe {
+                    _ = timeline.signal(acquire);
+                }
+            }
+        });
+        (self.dmatex_uid, acquire, release)
     }
 
     pub fn is_transparent(&self) -> bool {

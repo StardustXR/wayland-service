@@ -41,7 +41,7 @@ impl Display {
         }
     }
     pub fn next_server_id(&self) -> ObjectId {
-        unsafe { ObjectId::from_raw(self.id_counter.inc()) }
+        unsafe { ObjectId::from_raw(self.id_counter.get()) }
     }
 }
 impl WlDisplay for Display {

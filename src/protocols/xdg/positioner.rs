@@ -1,6 +1,7 @@
-use crate::{nodes::items::panel::Geometry, wayland::WaylandResult};
+use crate::error::WaylandResult;
 use mint::Vector2;
 use parking_lot::Mutex;
+use stardust_xr_panel_item::protocol::Geometry;
 use waynest::ObjectId;
 use waynest_protocols::server::stable::xdg_shell::xdg_positioner::*;
 use waynest_server::Client as _;
@@ -43,8 +44,8 @@ impl PositionerData {
         }
     }
     pub fn infinite_geometry(&self) -> Geometry {
-        let anchor_point = match self.anchor {
-            Anchor::TopLeft => self.anchor_rect.origin,
+        let anchor_point: Vector2<i32> = match self.anchor {
+            Anchor::TopLeft => self.anchor_rect.origin.into(),
             Anchor::Top => [
                 self.anchor_rect.origin.x + (self.anchor_rect.size.x / 2) as i32,
                 self.anchor_rect.origin.y,
@@ -88,12 +89,12 @@ impl PositionerData {
         };
 
         let mut geometry = Geometry {
-            origin: [
-                anchor_point.x + self.offset.x,
-                anchor_point.y + self.offset.y,
-            ]
+            origin: Vector2 {
+                x: anchor_point.x + self.offset.x,
+                y: anchor_point.y + self.offset.y,
+            }
             .into(),
-            size: self.size,
+            size: self.size.into(),
         };
 
         // apply gravity
@@ -116,7 +117,10 @@ impl Default for PositionerData {
     fn default() -> Self {
         Self {
             size: [0; 2].into(),
-            anchor_rect: Default::default(),
+            anchor_rect: Geometry {
+                origin: Vector2::from([0; 2]).into(),
+                size: Vector2::from([0; 2]).into(),
+            },
             offset: [0, 0].into(),
             anchor: Anchor::TopLeft,
             gravity: Gravity::TopLeft,
@@ -128,7 +132,7 @@ impl Default for PositionerData {
 }
 
 #[derive(Debug, waynest_server::RequestDispatcher)]
-#[waynest(error = crate::wayland::WaylandError, connection = crate::wayland::Client)]
+#[waynest(error = crate::error::WaylandError, connection = crate::client::Client)]
 pub struct Positioner {
     data: Mutex<PositionerData>,
     id: ObjectId,
@@ -147,7 +151,7 @@ impl Positioner {
     }
 }
 impl XdgPositioner for Positioner {
-    type Connection = crate::wayland::Client;
+    type Connection = crate::client::Client;
 
     async fn set_size(
         &self,
@@ -166,14 +170,18 @@ impl XdgPositioner for Positioner {
         &self,
         _client: &mut Self::Connection,
         _sender_id: ObjectId,
-        _x: i32,
-        _y: i32,
-        _width: i32,
-        _height: i32,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
     ) -> WaylandResult<()> {
         let mut data = self.data.lock();
-        data.anchor_rect.origin = [_x, _y].into();
-        data.anchor_rect.size = [_width.max(0) as u32, _height.max(0) as u32].into();
+        data.anchor_rect.origin = Vector2 { x, y }.into();
+        data.anchor_rect.size = Vector2 {
+            x: width.max(0) as u32,
+            y: height.max(0) as u32,
+        }
+        .into();
         data.offset = [0, 0].into();
         Ok(())
     }

@@ -1,6 +1,10 @@
+use crate::{BINDER_DEV, client::Client, error::WaylandResult, protocols::core::{seat::Seat, surface::Surface}};
+
 use super::backend::XdgBackend;
+use binderbinder::binder_object::BinderObject;
 use mint::Vector2;
 use parking_lot::Mutex;
+use stardust_xr_panel_item::protocol::{PanelShell, SurfaceId};
 use std::sync::Arc;
 use waynest::ObjectId;
 pub use waynest_protocols::server::stable::xdg_shell::xdg_toplevel::*;
@@ -8,17 +12,15 @@ use waynest_server::Client as _;
 
 #[derive(Debug)]
 pub struct MappedInner {
-    pub panel_item: Arc,
+    pub panel_item: Arc<BinderObject<XdgBackend>>,
 }
 impl MappedInner {
-    pub fn create(seat: &Arc<Seat>, toplevel: &Arc<Toplevel>, pid: Option<i32>) -> Self {
-        let (panel_item_node, panel_item) =
-            PanelItem::create(Box::new(XdgBackend::new(seat, toplevel)), pid);
+    pub fn create(seat: &Arc<Seat>, toplevel: &Arc<Toplevel>, panel_shell: PanelShell) -> Self {
+        let dev = BINDER_DEV.wait();
+        let item = XdgBackend::new(seat, toplevel, panel_shell);
 
-        Self {
-            panel_item_node,
-            panel_item,
-        }
+        // Self {}
+        todo!()
     }
 }
 
@@ -58,7 +60,7 @@ impl Toplevel {
         wl_surface: Arc<Surface>,
         xdg_surface: Arc<super::surface::Surface>,
     ) -> Self {
-        let _ = wl_surface.surface_id.set(SurfaceId::Toplevel(()));
+        let _ = wl_surface.surface_id.set(SurfaceId::Toplevel);
 
         Toplevel {
             id: object_id,
@@ -78,7 +80,7 @@ impl Toplevel {
     pub fn app_id(&self) -> Option<String> {
         self.data.lock().app_id.clone()
     }
-    pub fn parent(&self) -> Option<Id> {
+    pub fn parent(&self) -> Option<u64> {
         self.data.lock().parent
     }
 
@@ -144,7 +146,7 @@ impl Toplevel {
     }
 }
 impl XdgToplevel for Toplevel {
-    type Connection = crate::wayland::Client;
+    type Connection = crate::client::Client;
 
     async fn set_parent(
         &self,
@@ -169,7 +171,7 @@ impl XdgToplevel for Toplevel {
                 self.data
                     .lock()
                     .parent
-                    .replace(mapped.panel_item_node.get_id());
+                    .replace(todo!()/* mapped.panel_item_node.get_id() */);
             }
         } else {
             // Per spec: null parent unsets the parent, making this a top-level window

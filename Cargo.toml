@@ -60,6 +60,7 @@ stardust-xr-cme.workspace = true
 stardust-xr-panel-item.workspace = true
 binderbinder.path="../binderbinder"
 pion-binder.path="../pion"
+gluon-wire.path="../gluon/gluon-wire"
 vulkano.workspace = true
 rand = "0.10.0"
 rustc-hash = "2.1.1"

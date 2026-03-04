@@ -2538,6 +2538,7 @@ dependencies = [
  "directories",
  "drm-fourcc",
  "futures-sink",
+ "gluon-wire",
  "input-event-codes",
  "memfd",
  "memmap2",

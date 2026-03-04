@@ -4,6 +4,7 @@ use crate::error::{WaylandError, WaylandResult};
 use crate::util::{BufferedState, SurfaceCommitAwareBuffer};
 use mint::Vector2;
 use parking_lot::Mutex;
+use rand::random;
 use stardust_xr_panel_item::protocol::{ChildState, Geometry, Rect, SurfaceId};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -98,8 +99,8 @@ pub struct Subsurface {
 
 impl Subsurface {
     pub fn new(id: ObjectId, surface: Arc<Surface>, parent: Arc<Surface>) -> Self {
-        let child_id = rand::rng().random();
-        let _ = surface.surface_id.set(SurfaceId::Child(child_id));
+        let child_id = random();
+        let _ = surface.surface_id.set(SurfaceId::Child { id: child_id });
         surface.set_parent(&parent);
 
         Self {
@@ -157,7 +158,7 @@ impl Subsurface {
                 if surface.currently_has_valid_buffer() {
                     *surface.panel_item.lock() = Arc::downgrade(&panel_item);
                     let info = subsurface.create_child_info(surface.current_buffer_size());
-                    panel_item.backend.add_child(&subsurface.surface, info);
+                    panel_item.add_child(&subsurface.surface, info);
                     return false; // Remove handler after adding child once
                 }
                 true
@@ -184,7 +185,7 @@ impl Subsurface {
                 let state = subsurface.state.lock();
                 let subsurface_state = *state.current();
                 drop(state);
-                let size = surface
+                let size: Vector2<_> = surface
                     .current_buffer_size()
                     .map(|b| [b.x as u32, b.y as u32].into())
                     .unwrap_or([0; 2].into());
@@ -192,13 +193,15 @@ impl Subsurface {
                 tracing::debug!("Updating backend after cached state apply: size={:?}", size);
 
                 let geometry = Geometry {
-                    origin: [subsurface_state.position.0, subsurface_state.position.1].into(),
-                    size,
+                    origin: Vector2 {
+                        x: subsurface_state.position.0,
+                        y: subsurface_state.position.1,
+                    }
+                    .into(),
+                    size: size.into(),
                 };
-                panel_item.backend.reposition_child(&surface, geometry);
-                panel_item
-                    .backend
-                    .update_child_z_order(&surface, subsurface_state.z_order);
+                panel_item.reposition_child(&surface, geometry);
+                panel_item.update_child_z_order(&surface, subsurface_state.z_order);
             }
 
             true
@@ -208,7 +211,7 @@ impl Subsurface {
     fn create_child_info(&self, buffer_size: Option<Vector2<usize>>) -> ChildState {
         let state = self.state.lock();
 
-        let size = buffer_size
+        let size: Vector2<_> = buffer_size
             .map(|b| [b.x as u32, b.y as u32].into())
             .unwrap_or([0; 2].into());
 
@@ -217,14 +220,18 @@ impl Subsurface {
             .surface
             .parent()
             .and_then(|p| p.surface_id.get().cloned())
-            .unwrap_or(SurfaceId::Toplevel(()));
+            .unwrap_or(SurfaceId::Toplevel);
 
         ChildState {
             id: self.child_id.lock().unwrap(),
             parent: parent_surface_id,
             geometry: Geometry {
-                origin: [state.current().position.0, state.current().position.1].into(),
-                size,
+                origin: Vector2 {
+                    x: state.current().position.0,
+                    y: state.current().position.1,
+                }
+                .into(),
+                size: size.into(),
             },
             z_order: state.current().z_order,
             input_regions: vec![Rect {
@@ -250,7 +257,7 @@ impl WlSubsurface for Subsurface {
                 client.remove(self.id);
                 return Ok(());
             };
-            panel_item.backend.remove_child(&self.surface);
+            panel_item.remove_child(&self.surface);
         }
 
         // Clear the commit filter
@@ -281,10 +288,10 @@ impl WlSubsurface for Subsurface {
     ) -> WaylandResult<()> {
         // Get the sibling's z_order
         let sibling_z_order = if let Some(sibling_surface) = client.get::<Surface>(sibling)
-            && let Some(SurfaceId::Child(sibling_id)) = sibling_surface.surface_id.get()
+            && let Some(SurfaceId::Child { id: sibling_id }) = sibling_surface.surface_id.get()
             && let Some(parent) = self.surface.parent()
             && let Some(panel_item) = parent.panel_item.lock().upgrade()
-            && let Some(child_entry) = panel_item.backend.children.get(sibling_id)
+            && let Some(child_entry) = panel_item.children.get(sibling_id)
         {
             child_entry.1.z_order
         } else {
@@ -308,7 +315,7 @@ impl WlSubsurface for Subsurface {
             && let Some(SurfaceId::Child { id: sibling_id }) = sibling_surface.surface_id.get()
             && let Some(parent) = self.surface.parent()
             && let Some(panel_item) = parent.panel_item.lock().upgrade()
-            && let Some(child_entry) = panel_item.backend.children.get(sibling_id)
+            && let Some(child_entry) = panel_item.children.get(sibling_id)
         {
             child_entry.1.z_order
         } else {
