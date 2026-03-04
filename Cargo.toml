@@ -19,6 +19,7 @@ stardust-xr-fusion = { git = "https://github.com/StardustXR/core.git", version =
 stardust-xr-wire = { git = "https://github.com/StardustXR/core.git", version = "0.50.0" }
 stardust-xr-cme = { git = "https://github.com/StardustXR/cme.git", version = "0.50.0" }
 stardust-xr-molecules = { git = "https://github.com/StardustXR/molecules.git", version = "0.50.0" }
+stardust-xr-panel-item = { path = "../stardust-xr-panel-item" }
 vulkano = { git = "https://github.com/Schmarni-Dev/vulkano", branch = "0_35_dmabuf_fixes", default-features = false }
 
 [dependencies]
@@ -56,4 +57,10 @@ mint.workspace = true
 # stardust-xr-gluon.workspace = true
 stardust-xr-fusion.workspace = true
 stardust-xr-cme.workspace = true
+stardust-xr-panel-item.workspace = true
+binderbinder.path="../binderbinder"
+pion-binder.path="../pion"
 vulkano.workspace = true
+rand = "0.10.0"
+rustc-hash = "2.1.1"
+timeline_syncobj = { version = "0.1.1", features = ["tokio"] }

@@ -1,14 +1,17 @@
 use super::buffer_backing::DmabufBacking;
-use crate::wayland::{
-    Client, WaylandError, WaylandResult,
-    core::buffer::{Buffer, BufferBacking},
-    util::ClientExt,
+use crate::{
+    client::Client,
+    error::{WaylandError, WaylandResult},
+    protocols::core::buffer::{Buffer, BufferBacking},
 };
-use bevy_dmabuf::dmatex::DmatexPlane;
 use drm_fourcc::DrmFourcc;
 use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
-use std::os::fd::{AsRawFd, OwnedFd};
+use stardust_xr_fusion::drawable::DmatexPlane;
+use std::{
+    os::fd::{AsRawFd, OwnedFd},
+    sync::OnceLock,
+};
 use waynest::ObjectId;
 use waynest_protocols::server::stable::linux_dmabuf_v1::zwp_linux_buffer_params_v1::{
     Error, Flags, ZwpLinuxBufferParamsV1,
@@ -21,10 +24,11 @@ use waynest_server::Client as _;
 /// that together form a single logical buffer. The object may eventually
 /// create one wl_buffer unless cancelled by destroying it.
 #[derive(Debug, waynest_server::RequestDispatcher)]
-#[waynest(error = crate::wayland::WaylandError, connection = crate::wayland::Client)]
+#[waynest(error = crate::error::WaylandError, connection = crate::client::Client)]
 pub struct BufferParams {
     pub id: ObjectId,
     pub(super) planes: Mutex<FxHashMap<u32, DmatexPlane>>,
+    pub(super) modifier: OnceLock<u64>,
 }
 
 impl BufferParams {
@@ -34,6 +38,7 @@ impl BufferParams {
         Self {
             id,
             planes: Mutex::new(FxHashMap::default()),
+            modifier: OnceLock::new(),
         }
     }
 }
@@ -79,16 +84,31 @@ impl ZwpLinuxBufferParamsV1 for BufferParams {
                 plane_idx,
                 self.id
             );
-            return Err(crate::wayland::WaylandError::MissingObject(self.id));
+            return Err(WaylandError::MissingObject(self.id));
         }
 
         // Create plane with the provided parameters
         let plane = DmatexPlane {
             dmabuf_fd: fd.into(),
             offset,
-            stride: stride as i32,
-            modifier: ((modifier_hi as u64) << 32) | (modifier_lo as u64),
+            row_size: stride as u32,
+            array_element_size: 0,
+            depth_slice_size: 0,
         };
+
+        let modifier = ((modifier_hi as u64) << 32) | (modifier_lo as u64);
+        let stored_modifier = *self.modifier.get_or_init(|| modifier);
+        if modifier != stored_modifier {
+            tracing::error!(
+                "used differing modifers for dmabuf backing planes, previous modifier: {:x}, new modifier: {:x}",
+                stored_modifier, modifier
+            );
+            return Err(WaylandError::Fatal {
+                object_id: self.id,
+                code: Error::InvalidFormat.into(),
+                message: "used multiple differing modifiers for one buffer",
+            });
+        }
 
         // Store the plane
         planes.insert(plane_idx, plane);
@@ -140,7 +160,6 @@ impl ZwpLinuxBufferParamsV1 for BufferParams {
         format: u32,
         flags: Flags,
     ) -> WaylandResult<()> {
-        // TODO: terminate client on fail, or send a fail event or something
         // Create the buffer with DMA-BUF backing using self as the backing
         match DmabufBacking::from_params(
             client.get::<Self>(self.id).unwrap(),

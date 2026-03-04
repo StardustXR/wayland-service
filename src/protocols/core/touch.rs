@@ -1,11 +1,12 @@
-use crate::wayland::{Client, WaylandResult, core::surface::Surface};
 use mint::Vector2;
 use std::sync::Arc;
 use waynest::ObjectId;
 pub use waynest_protocols::server::core::wayland::wl_touch::*;
 
+use crate::{client::Client, error::WaylandResult, protocols::core::surface::Surface};
+
 #[derive(Debug, waynest_server::RequestDispatcher)]
-#[waynest(error = crate::wayland::WaylandError, connection = crate::wayland::Client)]
+#[waynest(error = crate::error::WaylandError, connection = crate::client::Client)]
 pub struct Touch(pub ObjectId);
 impl Touch {
     pub async fn handle_touch_down(
@@ -60,7 +61,7 @@ impl Touch {
 }
 
 impl WlTouch for Touch {
-    type Connection = crate::wayland::Client;
+    type Connection = Client;
 
     /// https://wayland.app/protocols/wayland#wl_touch:request:release
     async fn release(

@@ -1,9 +1,8 @@
 use crate::client::{Client, Message, MessageSink};
 use crate::error::WaylandResult;
-use crate::protocols::{
-    core::shm_buffer_backing::ShmBufferBacking, dmabuf::buffer_backing::DmabufBacking,
-};
+use crate::protocols::dmabuf::buffer_backing::DmabufBacking;
 
+use mint::Vector2;
 use std::sync::Arc;
 use waynest::ObjectId;
 pub use waynest_protocols::server::core::wayland::wl_buffer::*;
@@ -32,7 +31,7 @@ impl Drop for BufferUsage {
 
 #[derive(Debug)]
 pub enum BufferBacking {
-    Shm(ShmBufferBacking),
+    // Shm(ShmBufferBacking),
     Dmabuf(DmabufBacking),
 }
 
@@ -53,43 +52,36 @@ impl Buffer {
         Ok(client.insert(id, Self { id, backing })?)
     }
 
-    /// Returns the tex if it was updated
-    #[tracing::instrument(level = "debug", skip_all)]
-    pub fn update_tex(
-        &self,
-        dmatexes: &ImportedDmatexs,
-        images: &mut Assets<Image>,
-    ) -> Option<Handle<Image>> {
-        tracing::debug!("Updating texture for buffer {:?}", self.id);
+    /// returns (dmatex_uid, server_acquire_point, server_release_point)
+    pub fn update(&self) -> (u64, u64, u64) {
         match &self.backing {
-            BufferBacking::Shm(backing) => backing.update_tex(images),
-            BufferBacking::Dmabuf(backing) => backing.update_tex(dmatexes, images),
+            BufferBacking::Dmabuf(backing) => todo!(),
         }
     }
 
     pub fn is_transparent(&self) -> bool {
         match &self.backing {
-            BufferBacking::Shm(backing) => backing.is_transparent(),
+            // BufferBacking::Shm(backing) => backing.is_transparent(),
             BufferBacking::Dmabuf(backing) => backing.is_transparent(),
         }
     }
 
     pub fn size(&self) -> Vector2<usize> {
         match &self.backing {
-            BufferBacking::Shm(backing) => backing.size(),
+            // BufferBacking::Shm(backing) => backing.size(),
             BufferBacking::Dmabuf(backing) => backing.size(),
         }
     }
     pub fn uses_buffer_usage(&self) -> bool {
         matches!(
             self.backing,
-            BufferBacking::Dmabuf(_) | BufferBacking::Shm(_)
+            BufferBacking::Dmabuf(_) /* | BufferBacking::Shm(_) */
         )
     }
 }
 
 impl WlBuffer for Buffer {
-    type Connection = crate::wayland::Client;
+    type Connection = crate::client::Client;
 
     /// https://wayland.app/protocols/wayland#wl_buffer:request:destroy
     async fn destroy(&self, client: &mut Client, _sender_id: ObjectId) -> WaylandResult<()> {

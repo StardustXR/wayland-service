@@ -1,28 +1,33 @@
-use crate::nodes::drawable::dmatex::RENDER_DEV;
+use crate::{CLIENT, vulkan_ctx::VK};
 
 use super::buffer_params::BufferParams;
-use bevy::{
-    asset::{Assets, Handle},
-    image::Image,
-};
-use bevy_dmabuf::{
-    dmatex::{Dmatex, Resolution},
-    import::{
-        DmatexUsage, DropCallback, ImportError, ImportedDmatexs, ImportedTexture, import_texture,
-    },
-};
 use drm_fourcc::DrmFourcc;
 use mint::Vector2;
-use parking_lot::Mutex;
-use std::sync::{Arc, OnceLock};
+use rand::random;
+use stardust_xr_fusion::{
+    drawable::{self, DmatexPlane, DmatexSize},
+    node::NodeError,
+};
+use std::{
+    os::fd::OwnedFd,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+};
+use timeline_syncobj::timeline_syncobj::TimelineSyncObj;
 use waynest_protocols::server::stable::linux_dmabuf_v1::zwp_linux_buffer_params_v1::Flags;
 
 /// Parameters for a shared memory buffer
 pub struct DmabufBacking {
     size: Vector2<u32>,
     format: DrmFourcc,
-    tex: OnceLock<Handle<Image>>,
-    pending_imported_dmatex: Mutex<Option<ImportedTexture>>,
+    modifier: u64,
+    timeline: TimelineSyncObj,
+    fds: Arc<Vec<OwnedFd>>,
+    dmatex_id: u64,
+    dmatex_uid: u64,
+    next_acquire_point: AtomicU64,
 }
 
 impl std::fmt::Debug for DmabufBacking {
@@ -36,63 +41,74 @@ impl std::fmt::Debug for DmabufBacking {
 }
 
 impl DmabufBacking {
-    #[tracing::instrument(level = "debug", skip_all)]
-    pub fn new(dmatex: Dmatex) -> Result<Self, ImportError> {
-        let dev = RENDER_DEV.wait();
+    pub async fn new(
+        planes: Vec<DmatexPlane>,
+        modifier: u64,
+        size: Vector2<u32>,
+        format: DrmFourcc,
+    ) -> Result<Self, DmatexImportError> {
+        tracing::info!("Creating new DmabufBacking");
+        let client = CLIENT.wait();
+        let vk = VK.wait();
+        let dmatex_id = random();
+        let timeline = TimelineSyncObj::create(vk.render_dev.drm_node())
+            .map_err(DmatexImportError::TimelineCreationError)?;
+        drawable::import_dmatex(
+            client,
+            dmatex_id,
+            DmatexSize::Dim2D(size),
+            format as u32,
+            modifier,
+            true,
+            None,
+            &planes,
+            timeline
+                .export()
+                .map_err(DmatexImportError::TimelineExportError)?
+                .into(),
+        );
+        let dmatex_uid = drawable::export_dmatex_uid(client, dmatex_id)
+            .await
+            .map_err(DmatexImportError::DmatexExportError)?;
+        let fds = planes
+            .iter()
+            .map(|v| {
+                v.dmabuf_fd
+                    .0
+                    .try_clone()
+                    .map_err(DmatexImportError::DmabufFdCloneError)
+            })
+            .collect::<Result<Vec<_>, _>>()?
+            .into();
 
-        Ok(Self {
-            size: [dmatex.res.x, dmatex.res.y].into(),
-            format: DrmFourcc::try_from(dmatex.format).unwrap(),
-            tex: OnceLock::new(),
-            pending_imported_dmatex: Mutex::new(Some(import_texture(
-                dev,
-                dmatex,
-                DropCallback(None),
-                DmatexUsage::Sampling,
-            )?)),
+        Ok(DmabufBacking {
+            size,
+            format,
+            dmatex_uid,
+            timeline,
+            dmatex_id,
+            modifier,
+            next_acquire_point: AtomicU64::new(0),
+            fds,
         })
     }
-
     #[tracing::instrument(level = "debug", skip_all)]
-    pub fn from_params(
+    pub async fn from_params(
         params: Arc<BufferParams>,
         size: Vector2<u32>,
         format: DrmFourcc,
         flags: Flags,
-    ) -> Result<Self, ImportError> {
-        tracing::info!("Creating new DmabufBacking");
+    ) -> Result<Self, DmatexImportError> {
         let mut planes = Vec::from_iter(std::mem::take(&mut *params.planes.lock()));
         planes.sort_by_key(|(index, _)| *index);
         let planes = planes.into_iter().map(|(_, tex)| tex).collect::<Vec<_>>();
-        let dmatex = Dmatex {
-            planes,
-            res: Resolution {
-                x: size.x,
-                y: size.y,
-            },
-            format: format as u32,
-            // TODO: impl this in bevy-dmabuf
-            flip_y: flags.contains(Flags::YInvert),
-            srgb: true,
-        };
-
-        DmabufBacking::new(dmatex)
+        let modifier = *params.modifier.get().ok_or(DmatexImportError::NoModifier)?;
+        Self::new(planes, modifier, size, format)
     }
 
-    #[tracing::instrument(level = "debug", skip_all)]
-    pub fn update_tex(
-        &self,
-        dmatexes: &ImportedDmatexs,
-        images: &mut Assets<Image>,
-    ) -> Option<Handle<Image>> {
-        self.pending_imported_dmatex
-            .lock()
-            .take()
-            .map(|tex| dmatexes.insert_imported_dmatex(images, tex))
-            .inspect(|handle| {
-                _ = self.tex.set(handle.clone());
-            });
-        self.tex.get().cloned()
+    pub fn update(&self) {
+        let acquire = self.next_acquire_point.fetch_add(1, Ordering::Relaxed);
+        let release = self.next_acquire_point.fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn is_transparent(&self) -> bool {
@@ -120,4 +136,21 @@ impl DmabufBacking {
     pub fn size(&self) -> Vector2<usize> {
         [self.size.x as usize, self.size.y as usize].into()
     }
+}
+#[derive(Debug, thiserror::Error)]
+pub enum DmatexImportError {
+    #[error("Format modifier combination not found")]
+    InvalidFormat,
+    #[error("No modifier (no planes)")]
+    NoModifier,
+    #[error("Failed to enumerate Server Dmatex formats: {0}")]
+    FailedToEnumerateServerFormats(NodeError),
+    #[error("Failed to export Dmatex: {0}")]
+    DmatexExportError(NodeError),
+    #[error("Failed to create TimelineSyncObj: {0}")]
+    TimelineCreationError(rustix::io::Errno),
+    #[error("Failed to export TimelineSyncObj: {0}")]
+    TimelineExportError(rustix::io::Errno),
+    #[error("Failed clone Dmabuf fd: {0}")]
+    DmabufFdCloneError(std::io::Error),
 }

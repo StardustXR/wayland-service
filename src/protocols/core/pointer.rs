@@ -2,7 +2,7 @@ use super::surface::SurfaceRole;
 use crate::protocols::{core::surface::Surface, relative_pointer::RelativePointer};
 use crate::{client::Client, error::WaylandResult};
 use mint::Vector2;
-use panel_common::Geometry;
+use stardust_xr_panel_item::protocol::Geometry;
 use std::sync::Arc;
 use std::sync::Weak;
 use tokio::sync::{Mutex, RwLock};
@@ -238,8 +238,8 @@ impl WlPointer for Pointer {
             panel_item.set_cursor(surface.and_then(|s| client.get::<Surface>(s)).map(|s| {
                 let size = s.current_buffer_size().unwrap_or([16; 2].into());
                 Geometry {
-                    origin: [hotspot_x, hotspot_y].into(),
-                    size: [size.x as u32, size.y as u32].into(),
+                    origin: Vector2::from([hotspot_x, hotspot_y]).into(),
+                    size: Vector2::from([size.x as u32, size.y as u32]).into(),
                 }
             }));
         }

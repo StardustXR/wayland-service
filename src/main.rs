@@ -1,6 +1,6 @@
-use std::{env::args_os, path::PathBuf, time::Duration};
+use std::{env::args_os, path::PathBuf, sync::{Arc, OnceLock}, time::Duration};
 
-use stardust_xr_fusion::Client;
+use stardust_xr_fusion::{Client, ClientHandle};
 
 use crate::{socket::Wayland, vulkan_ctx::VkContext};
 
@@ -12,6 +12,8 @@ pub mod registry;
 pub mod socket;
 pub mod util;
 pub mod vulkan_ctx;
+
+pub static CLIENT: OnceLock<Arc<ClientHandle>> = OnceLock::new();
 
 #[tokio::main]
 async fn main() {
@@ -27,6 +29,7 @@ async fn main() {
     let async_loop = Client::connect().await.unwrap().async_event_loop();
     let client = async_loop.client_handle.clone();
     VkContext::init(&client).await;
+    CLIENT.set(client.clone());
 
     tokio::time::sleep(Duration::from_secs(10)).await;
 }

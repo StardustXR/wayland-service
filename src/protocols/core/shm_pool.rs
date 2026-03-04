@@ -1,8 +1,5 @@
-use super::shm_buffer_backing::ShmBufferBacking;
-use crate::wayland::{
-    Client, WaylandResult,
-    core::buffer::{Buffer, BufferBacking},
-};
+// use super::shm_buffer_backing::ShmBufferBacking;
+use crate::{client::Client, error::WaylandResult, protocols::core::buffer::{Buffer, BufferBacking}};
 use memmap2::{MmapOptions, RemapOptions};
 use parking_lot::{Mutex, MutexGuard, RawMutex, lock_api::MappedMutexGuard};
 use std::os::fd::{AsRawFd, OwnedFd};
@@ -12,7 +9,7 @@ pub use waynest_protocols::server::core::wayland::wl_shm_pool::*;
 use waynest_server::Client as _;
 
 #[derive(Debug, waynest_server::RequestDispatcher)]
-#[waynest(error = crate::wayland::WaylandError, connection = crate::wayland::Client)]
+#[waynest(error = crate::error::WaylandError, connection = crate::client::Client)]
 pub struct ShmPool {
     inner: Mutex<memmap2::MmapMut>,
     id: ObjectId,
@@ -55,15 +52,15 @@ impl WlShmPool for ShmPool {
         stride: i32,
         format: Format,
     ) -> WaylandResult<()> {
-        let params = ShmBufferBacking::new(
-            client.get::<ShmPool>(sender_id).unwrap(),
-            offset as usize,
-            stride as usize,
-            [width as usize, height as usize].into(),
-            format,
-        );
-
-        Buffer::new(client, id, BufferBacking::Shm(params))?;
+        // let params = ShmBufferBacking::new(
+        //     client.get::<ShmPool>(sender_id).unwrap(),
+        //     offset as usize,
+        //     stride as usize,
+        //     [width as usize, height as usize].into(),
+        //     format,
+        // );
+        //
+        // Buffer::new(client, id, BufferBacking::Shm(params))?;
         Ok(())
     }
 

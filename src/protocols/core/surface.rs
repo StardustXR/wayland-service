@@ -9,11 +9,12 @@ use crate::{
     },
     util::{BufferedState, SurfaceCommitAwareBuffer, SurfaceCommitAwareBufferManager},
 };
+use binderbinder::binder_object::BinderObject;
 use mint::Vector2;
-use panel_common::Geometry;
 use parking_lot::Mutex;
+use stardust_xr_panel_item::protocol::{Geometry, SurfaceId};
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fmt::Display,
     sync::{Arc, LazyLock, OnceLock, Weak},
 };
@@ -115,13 +116,11 @@ pub struct Surface {
     state: Arc<Mutex<SurfaceCommitAwareBuffer<SurfaceState>>>,
     pub message_sink: MessageSink,
     pub role: OnceLock<SurfaceRole>,
-    pub panel_item: Mutex<Weak<PanelItem<XdgBackend>>>,
+    pub panel_item: Mutex<Weak<BinderObject<XdgBackend>>>,
     /// Called before commit - if it returns false, state.apply() is skipped
     requires_parent_sync: Mutex<Option<CommitFilter>>,
     on_commit_handlers: Mutex<Vec<OnCommitCallback>>,
     on_updated_current_state_handlers: Mutex<Vec<OnCommitCallback>>,
-    material: OnceLock<Handle<BevyMaterial>>,
-    pending_material_applications: Registry<ModelPart>,
     presentation_feedback: Mutex<Vec<Arc<PresentationFeedback>>>,
     state_buffer_manager: Arc<SurfaceCommitAwareBufferManager>,
     children: Registry<Surface>,
@@ -163,8 +162,6 @@ impl Surface {
                 requires_parent_sync: Mutex::new(None),
                 on_commit_handlers: Mutex::new(Vec::new()),
                 on_updated_current_state_handlers: Mutex::new(Vec::new()),
-                material: OnceLock::new(),
-                pending_material_applications: Registry::new(),
                 presentation_feedback: Mutex::default(),
                 state_buffer_manager: manager,
                 children: Registry::new(),
@@ -243,7 +240,7 @@ impl Surface {
         handlers.push(Box::new(handler));
     }
 
-    #[tracing::instrument(level = "debug", skip_all)]
+    // #[tracing::instrument(level = "debug", skip_all)]
     pub fn update_graphics(
         &self,
         dmatexes: &ImportedDmatexs,

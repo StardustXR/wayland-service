@@ -1,11 +1,10 @@
 use super::surface::{Surface, SurfaceRole};
-use crate::core::Id;
-use crate::nodes::items::panel::{ChildInfo, Geometry, SurfaceId};
-use crate::wayland::util::{BufferedState, SurfaceCommitAwareBuffer};
-use crate::wayland::{WaylandError, WaylandResult};
+use crate::client::Client;
+use crate::error::{WaylandError, WaylandResult};
+use crate::util::{BufferedState, SurfaceCommitAwareBuffer};
 use mint::Vector2;
 use parking_lot::Mutex;
-use rand::Rng;
+use stardust_xr_panel_item::protocol::{ChildState, Geometry, Rect, SurfaceId};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use waynest::ObjectId;
@@ -14,11 +13,11 @@ use waynest_protocols::server::core::wayland::wl_subsurface::WlSubsurface;
 use waynest_server::{Client as _, RequestDispatcher};
 
 #[derive(Debug, waynest_server::RequestDispatcher)]
-#[waynest(error = WaylandError, connection = crate::wayland::Client)]
+#[waynest(error = WaylandError, connection = Client)]
 pub struct Subcompositor;
 
 impl WlSubcompositor for Subcompositor {
-    type Connection = crate::wayland::Client;
+    type Connection = Client;
 
     /// https://wayland.app/protocols/wayland#wl_subcompositor:request:destroy
     async fn destroy(
@@ -88,18 +87,18 @@ impl BufferedState for SubsurfaceState {
 }
 
 #[derive(Debug, RequestDispatcher)]
-#[waynest(error = WaylandError, connection = crate::wayland::Client)]
+#[waynest(error = WaylandError, connection = Client)]
 pub struct Subsurface {
     id: ObjectId,
     surface: Arc<Surface>,
     state: Arc<Mutex<SurfaceCommitAwareBuffer<SubsurfaceState>>>,
-    child_id: Mutex<Option<Id>>,
+    child_id: Mutex<Option<u64>>,
     is_sync: AtomicBool,
 }
 
 impl Subsurface {
     pub fn new(id: ObjectId, surface: Arc<Surface>, parent: Arc<Surface>) -> Self {
-        let child_id = Id(rand::rng().random());
+        let child_id = rand::rng().random();
         let _ = surface.surface_id.set(SurfaceId::Child(child_id));
         surface.set_parent(&parent);
 
@@ -206,7 +205,7 @@ impl Subsurface {
         });
     }
 
-    fn create_child_info(&self, buffer_size: Option<Vector2<usize>>) -> ChildInfo {
+    fn create_child_info(&self, buffer_size: Option<Vector2<usize>>) -> ChildState {
         let state = self.state.lock();
 
         let size = buffer_size
@@ -220,7 +219,7 @@ impl Subsurface {
             .and_then(|p| p.surface_id.get().cloned())
             .unwrap_or(SurfaceId::Toplevel(()));
 
-        ChildInfo {
+        ChildState {
             id: self.child_id.lock().unwrap(),
             parent: parent_surface_id,
             geometry: Geometry {
@@ -228,13 +227,16 @@ impl Subsurface {
                 size,
             },
             z_order: state.current().z_order,
-            receives_input: true,
+            input_regions: vec![Rect {
+                origin: stardust_xr_panel_item::protocol::Vec2 { x: 0.0, y: 0.0 },
+                size: stardust_xr_panel_item::protocol::Vec2 { x: 1.0, y: 1.0 },
+            }],
         }
     }
 }
 
 impl WlSubsurface for Subsurface {
-    type Connection = crate::wayland::Client;
+    type Connection = Client;
 
     /// https://wayland.app/protocols/wayland#wl_subsurface:request:destroy
     async fn destroy(
@@ -303,7 +305,7 @@ impl WlSubsurface for Subsurface {
     ) -> WaylandResult<()> {
         // Get the sibling's z_order
         let sibling_z_order = if let Some(sibling_surface) = client.get::<Surface>(sibling)
-            && let Some(SurfaceId::Child(sibling_id)) = sibling_surface.surface_id.get()
+            && let Some(SurfaceId::Child { id: sibling_id }) = sibling_surface.surface_id.get()
             && let Some(parent) = self.surface.parent()
             && let Some(panel_item) = parent.panel_item.lock().upgrade()
             && let Some(child_entry) = panel_item.backend.children.get(sibling_id)

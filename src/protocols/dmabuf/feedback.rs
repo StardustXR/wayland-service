@@ -1,8 +1,5 @@
 use super::Dmabuf;
-use crate::{
-    core::vulkano_data::VULKANO_CONTEXT,
-    wayland::{Client, WaylandResult},
-};
+use crate::{CLIENT, client::Client, error::WaylandResult, vulkan_ctx::VK};
 use memfd::MemfdOptions;
 use std::{
     io::Write,
@@ -15,26 +12,17 @@ use waynest_protocols::server::stable::linux_dmabuf_v1::zwp_linux_dmabuf_feedbac
 };
 
 #[derive(Debug, waynest_server::RequestDispatcher)]
-#[waynest(error = crate::wayland::WaylandError, connection = crate::wayland::Client)]
+#[waynest(error = crate::error::WaylandError, connection = crate::client::Client)]
 pub struct DmabufFeedback(pub Arc<Dmabuf>);
 impl DmabufFeedback {
     #[tracing::instrument(level = "debug", skip_all)]
     pub async fn send_params(&self, client: &mut Client, sender_id: ObjectId) -> WaylandResult<()> {
+        let stardust_client = CLIENT.wait().clone();
+        let primary_dev_id = VK.wait().render_dev.drm_node_id();
         let num_formats = self.0.formats.len();
         // Send format table first
         self.send_format_table(client, sender_id).await?;
 
-        // Get the device information from Vulkan properties
-        let props = VULKANO_CONTEXT.get().unwrap().phys_dev.properties();
-
-        // Create dev_t from the primary node major/minor numbers
-        let primary_dev_id = {
-            let major = props.primary_major.unwrap() as u64;
-            let minor = props.primary_minor.unwrap() as u64;
-            // On Linux, dev_t is created with makedev(major, minor)
-            // which is ((major & 0xfffff000) << 32) | ((major & 0xfff) << 8) | (minor & 0xff)
-            ((major & 0xfffff000) << 32) | ((major & 0xfff) << 8) | (minor & 0xff)
-        };
         let dev_id = primary_dev_id.to_ne_bytes().to_vec();
 
         // Send main device
@@ -92,7 +80,7 @@ impl DmabufFeedback {
 }
 
 impl ZwpLinuxDmabufFeedbackV1 for DmabufFeedback {
-    type Connection = crate::wayland::Client;
+    type Connection = crate::client::Client;
 
     async fn destroy(
         &self,

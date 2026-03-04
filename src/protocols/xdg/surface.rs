@@ -1,10 +1,13 @@
-use super::{popup::Popup, positioner::Positioner, toplevel::MappedInner};
-use crate::nodes::items::panel::{ChildInfo, SurfaceId};
-use crate::wayland::{Client, WaylandError};
-use crate::wayland::{
-    Message, WaylandResult, core::surface::SurfaceRole, display::Display, util::ClientExt,
-    xdg::toplevel::Toplevel,
+use crate::{
+    client::{Client, Message},
+    display::Display,
+    error::{WaylandError, WaylandResult},
+    protocols::{core::surface::SurfaceRole, xdg::toplevel::Toplevel},
 };
+
+use super::{popup::Popup, positioner::Positioner, toplevel::MappedInner};
+use mint::Vector2;
+use stardust_xr_panel_item::protocol::{ChildState, Rect, SurfaceId};
 use std::sync::Arc;
 use waynest::ObjectId;
 use waynest_protocols::server::stable::xdg_shell::xdg_popup::XdgPopup;
@@ -12,18 +15,18 @@ pub use waynest_protocols::server::stable::xdg_shell::xdg_surface::*;
 use waynest_server::Client as _;
 
 #[derive(Debug, waynest_server::RequestDispatcher)]
-#[waynest(error = crate::wayland::WaylandError, connection = crate::wayland::Client)]
+#[waynest(error = crate::error::WaylandError, connection = crate::client::Client)]
 pub struct Surface {
     id: ObjectId,
     version: u32,
-    pub wl_surface: Arc<crate::wayland::core::surface::Surface>,
+    pub wl_surface: Arc<crate::protocols::core::surface::Surface>,
     configured: Arc<std::sync::atomic::AtomicBool>,
 }
 impl Surface {
     pub fn new(
         id: ObjectId,
         version: u32,
-        wl_surface: Arc<crate::wayland::core::surface::Surface>,
+        wl_surface: Arc<crate::protocols::core::surface::Surface>,
     ) -> Self {
         Self {
             id,
@@ -40,7 +43,7 @@ impl Surface {
 }
 
 impl XdgSurface for Surface {
-    type Connection = crate::wayland::Client;
+    type Connection = crate::client::Client;
 
     /// https://wayland.app/protocols/xdg-shell#xdg_surface:request:destroy
     async fn destroy(
@@ -157,19 +160,22 @@ impl XdgSurface for Surface {
         let serial = client.next_event_serial();
         self.configure(client, sender_id, serial).await?;
 
-        let Some(SurfaceId::Child(id)) = self.wl_surface.surface_id.get() else {
+        let Some(SurfaceId::Child { id }) = self.wl_surface.surface_id.get() else {
             return Ok(());
         };
         let Some(parent_id) = parent.wl_surface.surface_id.get() else {
             return Ok(());
         };
 
-        let child_info = ChildInfo {
-            id: *id,
+        let child_info = ChildState {
+            id: id,
             parent: parent_id.clone(),
             geometry: positioner.data().infinite_geometry(),
             z_order: 1,
-            receives_input: true,
+            input_regions: vec![Rect {
+                origin: Vector2::from([0.0; 2]).into(),
+                size: Vector2::from([1.0; 2]).into(),
+            }],
         };
 
         let popup_weak = Arc::downgrade(&popup);
