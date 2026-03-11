@@ -43,7 +43,7 @@ impl MesaDrm {
         let formats = DmatexFormat::enumerate(sd_client, &vk.render_dev)
             .await
             .iter()
-            .flat_map(|v| v.into_values())
+            .flat_map(|v| v.values())
             .map(|f| f.drm_fourcc())
             .collect::<FxHashSet<_>>();
         for format in formats {

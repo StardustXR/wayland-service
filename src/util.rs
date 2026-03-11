@@ -1,5 +1,7 @@
 #![allow(unused)]
 
+pub mod registry;
+
 use parking_lot::Mutex;
 use std::{
     fmt::Debug,

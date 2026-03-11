@@ -1,10 +1,16 @@
-use crate::{BINDER_DEV, client::Client, error::WaylandResult, protocols::core::{seat::Seat, surface::Surface}};
+use crate::{
+    client::Client,
+    error::WaylandResult,
+    panel_item_ui::PanelItemUi,
+    protocols::core::{seat::Seat, surface::Surface},
+};
 
 use super::backend::XdgBackend;
 use binderbinder::binder_object::BinderObject;
 use mint::Vector2;
 use parking_lot::Mutex;
-use stardust_xr_panel_item::protocol::{PanelShell, SurfaceId};
+use stardust_xr_fusion::spatial::SpatialRef;
+use stardust_xr_panel_item::protocol::SurfaceId;
 use std::sync::Arc;
 use waynest::ObjectId;
 pub use waynest_protocols::server::stable::xdg_shell::xdg_toplevel::*;
@@ -15,12 +21,12 @@ pub struct MappedInner {
     pub panel_item: Arc<BinderObject<XdgBackend>>,
 }
 impl MappedInner {
-    pub fn create(seat: &Arc<Seat>, toplevel: &Arc<Toplevel>, panel_shell: PanelShell) -> Self {
-        let dev = BINDER_DEV.wait();
-        let item = XdgBackend::new(seat, toplevel, panel_shell);
-
-        // Self {}
-        todo!()
+    // TODO: add local panel item ui and make switching work by aborting the release task and
+    // recreating it with a new release point in the timeline
+    pub fn create(seat: &Arc<Seat>, toplevel: &Arc<Toplevel>, at: SpatialRef) -> Self {
+        // TODO: error handling
+        let panel_item = PanelItemUi::new(at, seat, toplevel);
+        Self { panel_item }
     }
 }
 
@@ -171,7 +177,8 @@ impl XdgToplevel for Toplevel {
                 self.data
                     .lock()
                     .parent
-                    .replace(todo!()/* mapped.panel_item_node.get_id() */);
+                    // TODO: figure out an actual uid for this
+                    .replace(0);
             }
         } else {
             // Per spec: null parent unsets the parent, making this a top-level window

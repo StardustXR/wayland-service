@@ -186,19 +186,3 @@ impl ZwpLinuxBufferParamsV1 for BufferParams {
         Ok(())
     }
 }
-
-impl Drop for BufferParams {
-    #[tracing::instrument(level = "debug", skip_all)]
-    fn drop(&mut self) {
-        let planes = self.planes.get_mut();
-        tracing::info!("BufferParams being dropped with {} planes", planes.len());
-        for (idx, plane) in planes.iter() {
-            tracing::info!(
-                "Dropping plane {} with fd {}",
-                idx,
-                plane.dmabuf_fd.as_raw_fd()
-            );
-        }
-        planes.clear();
-    }
-}

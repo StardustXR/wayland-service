@@ -1,4 +1,4 @@
-use crate::client::{Client, Message, MessageSink};
+use crate::client::{Client, MessageSink};
 use crate::error::WaylandResult;
 use crate::protocols::dmabuf::buffer_backing::DmabufBacking;
 
@@ -7,27 +7,6 @@ use std::sync::Arc;
 use waynest::ObjectId;
 pub use waynest_protocols::server::core::wayland::wl_buffer::*;
 use waynest_server::{Client as _, RequestDispatcher};
-
-#[derive(Debug)]
-pub struct BufferUsage {
-    pub buffer: Arc<Buffer>,
-    message_sink: MessageSink,
-}
-impl BufferUsage {
-    pub fn new(client: &Client, buffer: &Arc<Buffer>) -> Arc<Self> {
-        Arc::new(Self {
-            buffer: buffer.clone(),
-            message_sink: client.message_sink(),
-        })
-    }
-}
-impl Drop for BufferUsage {
-    fn drop(&mut self) {
-        let _ = self
-            .message_sink
-            .send(Message::ReleaseBuffer(self.buffer.clone()));
-    }
-}
 
 #[derive(Debug)]
 pub enum BufferBacking {
@@ -40,6 +19,7 @@ pub enum BufferBacking {
 pub struct Buffer {
     pub id: ObjectId,
     backing: BufferBacking,
+    message_sink: MessageSink,
 }
 
 impl Buffer {
@@ -49,14 +29,34 @@ impl Buffer {
         id: ObjectId,
         backing: BufferBacking,
     ) -> WaylandResult<Arc<Self>> {
-        Ok(client.insert(id, Self { id, backing })?)
+        Ok(client.insert(
+            id,
+            Self {
+                id,
+                backing,
+                message_sink: client.message_sink(),
+            },
+        )?)
     }
 
     /// returns (dmatex_uid, server_acquire_point, server_release_point)
-    pub fn update(&self) -> (u64, u64, u64) {
-        match &self.backing {
-            BufferBacking::Dmabuf(backing) => todo!(),
-        }
+    pub fn update(self: &Arc<Self>) -> (u64, u64, u64) {
+        let (dmatex_uid, acquire, release) = match &self.backing {
+            BufferBacking::Dmabuf(backing) => backing.update(),
+        };
+        let timeline = match &self.backing {
+            BufferBacking::Dmabuf(backing) => backing.timeline(),
+        };
+        tokio::spawn({
+            let message_sink = self.message_sink.clone();
+            let buffer = self.clone();
+            async move {
+                timeline.wait_async(release).unwrap().await;
+                tracing::trace!("sending buffer release");
+                message_sink.send(crate::client::Message::ReleaseBuffer(buffer))
+            }
+        });
+        (dmatex_uid, acquire, release)
     }
 
     pub fn is_transparent(&self) -> bool {
@@ -71,12 +71,6 @@ impl Buffer {
             // BufferBacking::Shm(backing) => backing.size(),
             BufferBacking::Dmabuf(backing) => backing.size(),
         }
-    }
-    pub fn uses_buffer_usage(&self) -> bool {
-        matches!(
-            self.backing,
-            BufferBacking::Dmabuf(_) /* | BufferBacking::Shm(_) */
-        )
     }
 }
 

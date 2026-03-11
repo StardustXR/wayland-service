@@ -1,23 +1,27 @@
 use super::{buffer::Buffer, callback::Callback};
 use crate::{
-    client::{Client, MessageSink},
+    client::{Client, Message, MessageSink},
     error::{WaylandError, WaylandResult},
+    frame_dispatcher::FRAME_EVENT_PROVIDER,
     protocols::{
-        core::buffer::BufferUsage,
         presentation::{MonotonicTimestamp, PresentationFeedback},
         xdg::backend::XdgBackend,
     },
-    util::{BufferedState, SurfaceCommitAwareBuffer, SurfaceCommitAwareBufferManager},
+    util::{
+        BufferedState, SurfaceCommitAwareBuffer, SurfaceCommitAwareBufferManager,
+        registry::Registry,
+    },
 };
 use binderbinder::binder_object::BinderObject;
 use mint::Vector2;
 use parking_lot::Mutex;
 use stardust_xr_panel_item::protocol::{Geometry, SurfaceId};
 use std::{
-    collections::{HashMap, HashSet},
     fmt::Display,
-    sync::{Arc, LazyLock, OnceLock, Weak},
+    sync::{Arc, OnceLock, Weak},
 };
+use tokio::sync::broadcast::error::RecvError;
+// use stardust_xr_panel_item::
 use tracing::info;
 use waynest::ObjectId;
 use waynest_protocols::server::{
@@ -25,9 +29,6 @@ use waynest_protocols::server::{
     stable::presentation_time::wp_presentation_feedback::{Kind, WpPresentationFeedback},
 };
 use waynest_server::Client as _;
-
-pub static WL_SURFACE_REGISTRY: LazyLock<Mutex<HashSet<Weak<Surface>>>> =
-    LazyLock::new(Mutex::default);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SurfaceRole {
@@ -47,15 +48,9 @@ impl Display for SurfaceRole {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct BufferState {
-    pub buffer: Arc<Buffer>,
-    pub usage: Option<Arc<BufferUsage>>,
-}
-
 #[derive(Debug)]
 pub struct SurfaceState {
-    pub buffer: Option<BufferState>,
+    pub buffer: Option<Arc<Buffer>>,
     pub density: f32,
     pub geometry: Option<Geometry>,
     pub min_size: Option<Vector2<u32>>,
@@ -99,7 +94,7 @@ impl SurfaceState {
     pub fn has_valid_buffer(&self) -> bool {
         self.buffer
             .as_ref()
-            .is_some_and(|b| b.buffer.size().x > 0 && b.buffer.size().y > 0)
+            .is_some_and(|b| b.size().x > 0 && b.size().y > 0)
     }
 }
 
@@ -117,7 +112,7 @@ pub struct Surface {
     pub message_sink: MessageSink,
     pub role: OnceLock<SurfaceRole>,
     pub panel_item: Mutex<Weak<BinderObject<XdgBackend>>>,
-    /// Called before commit - if it returns false, state.apply() is skipped
+    // pub panel_item: Mutex<Weak<PanelItem>>,
     requires_parent_sync: Mutex<Option<CommitFilter>>,
     on_commit_handlers: Mutex<Vec<OnCommitCallback>>,
     on_updated_current_state_handlers: Mutex<Vec<OnCommitCallback>>,
@@ -139,7 +134,6 @@ impl std::fmt::Debug for Surface {
                 "on_commit_handlers",
                 &format!("<{} handlers>", self.on_commit_handlers.lock().len()),
             )
-            .field("material", &self.material)
             .field("presentation_feedback", &self.presentation_feedback)
             .finish()
     }
@@ -147,7 +141,7 @@ impl std::fmt::Debug for Surface {
 impl Surface {
     #[tracing::instrument(level = "debug", skip_all)]
     pub fn new(client: &Client, id: ObjectId) -> Arc<Self> {
-        Arc::new_cyclic(|surface| {
+        let surface = Arc::new_cyclic(|surface| {
             let manager = SurfaceCommitAwareBufferManager::new(surface.clone());
             Surface {
                 id,
@@ -167,7 +161,35 @@ impl Surface {
                 children: Registry::new(),
                 parent: OnceLock::new(),
             }
-        })
+        });
+        surface.add_updated_current_state_handler(|surface| {
+            surface.buffer_update();
+            surface.frame_event();
+            true
+        });
+        tokio::spawn({
+            let surface = Arc::downgrade(&surface);
+            async move {
+                let mut frame_recv = FRAME_EVENT_PROVIDER.subscribe();
+                loop {
+                    let _frame_info = match frame_recv.recv().await {
+                        Err(RecvError::Closed) => break,
+                        Err(RecvError::Lagged(v)) => {
+                            tracing::warn!("Missed {v} frame events");
+                            continue;
+                        }
+                        Ok(v) => v,
+                    };
+                    let Some(surface) = surface.upgrade() else {
+                        break;
+                    };
+                    // TODO: add predicted display time to the stardust
+                    // protocol and dispatch presentation feedback
+                    surface.frame_event();
+                }
+            }
+        });
+        surface
     }
 
     pub async fn try_set_role(
@@ -241,62 +263,45 @@ impl Surface {
     }
 
     // #[tracing::instrument(level = "debug", skip_all)]
-    pub fn update_graphics(
-        &self,
-        dmatexes: &ImportedDmatexs,
-        materials: &mut Assets<BevyMaterial>,
-        images: &mut Assets<Image>,
-    ) {
-        let Some(buffer) = self.state.lock().current().buffer.clone() else {
-            return;
-        };
+    // pub fn update_graphics(
+    //     &self,
+    //     dmatexes: &ImportedDmatexs,
+    //     materials: &mut Assets<BevyMaterial>,
+    //     images: &mut Assets<Image>,
+    // ) {
+    //     let Some(buffer) = self.state.lock().current().buffer.clone() else {
+    //         return;
+    //     };
+    //
+    //     let material = self.material.get_or_init(|| {
+    //         // // Set default shader parameters
+    //         // let mut params = mat_wrapper.0.get_all_param_info();
+    //         // params.set_vec2("uv_scale", stereokit_rust::maths::Vec2::new(1.0, 1.0));
+    //         // params.set_vec2("uv_offset", stereokit_rust::maths::Vec2::new(0.0, 0.0));
+    //         // params.set_float("fcFactor", 1.0);
+    //         // params.set_float("ripple", 4.0);
+    //         // params.set_float("alpha_min", 0.0);
+    //         // params.set_float("alpha_max", 1.0);
+    //
+    //         materials.add(BevyMaterial {
+    //             unlit: true,
+    //             ..Default::default()
+    //         })
+    //     });
+    //
+    //     if let Some(new_tex) = buffer.buffer.update_tex(dmatexes, images) {
+    //         let material = materials.get_mut(material).unwrap();
+    //         material.base_color_texture.replace(new_tex);
+    //         material.alpha_mode = if buffer.buffer.is_transparent() {
+    //             AlphaMode::Premultiplied
+    //         } else {
+    //             AlphaMode::Opaque
+    //         };
+    //     }
+    //
+    //     self.apply_surface_materials();
+    // }
 
-        let material = self.material.get_or_init(|| {
-            // // Set default shader parameters
-            // let mut params = mat_wrapper.0.get_all_param_info();
-            // params.set_vec2("uv_scale", stereokit_rust::maths::Vec2::new(1.0, 1.0));
-            // params.set_vec2("uv_offset", stereokit_rust::maths::Vec2::new(0.0, 0.0));
-            // params.set_float("fcFactor", 1.0);
-            // params.set_float("ripple", 4.0);
-            // params.set_float("alpha_min", 0.0);
-            // params.set_float("alpha_max", 1.0);
-
-            materials.add(BevyMaterial {
-                unlit: true,
-                ..Default::default()
-            })
-        });
-
-        if let Some(new_tex) = buffer.buffer.update_tex(dmatexes, images) {
-            let material = materials.get_mut(material).unwrap();
-            material.base_color_texture.replace(new_tex);
-            material.alpha_mode = if buffer.buffer.is_transparent() {
-                AlphaMode::Premultiplied
-            } else {
-                AlphaMode::Opaque
-            };
-        }
-
-        self.apply_surface_materials();
-    }
-
-    #[tracing::instrument(level = "debug", skip_all)]
-    pub fn apply_material(&self, model_part: &Arc<ModelPart>) {
-        // tracing::info!("uwu applying material");
-        self.pending_material_applications.add_raw(model_part)
-    }
-
-    #[tracing::instrument(level = "debug", skip_all)]
-    fn apply_surface_materials(&self) {
-        let Some(mat) = self.material.get() else {
-            return;
-        };
-
-        for model_node in self.pending_material_applications.get_valid_contents() {
-            model_node.replace_material(mat.clone());
-        }
-        self.pending_material_applications.clear();
-    }
     #[tracing::instrument("debug", skip_all)]
     pub fn current_buffer_size(&self) -> Option<Vector2<usize>> {
         self.state
@@ -304,23 +309,11 @@ impl Surface {
             .current()
             .buffer
             .as_ref()
-            .map(|b| b.buffer.size())
+            .map(|b| b.size())
     }
     #[tracing::instrument("debug", skip_all)]
-    pub fn current_buffer_usage(&self) -> Option<Arc<BufferUsage>> {
-        self.state
-            .lock()
-            .current()
-            .buffer
-            .as_ref()
-            .and_then(|b| b.usage.clone())
-    }
-    #[tracing::instrument(level = "debug", skip_all)]
-    pub fn frame_event(&self) {
-        let callbacks = std::mem::take(&mut self.state_lock().current.frame_callbacks);
-        if !callbacks.is_empty() {
-            let _ = self.message_sink.send(Message::Frame(callbacks));
-        }
+    pub fn current_buffer_usage(&self) -> Option<Arc<Buffer>> {
+        self.state.lock().current().buffer.clone()
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
@@ -411,6 +404,36 @@ impl Surface {
     }
 }
 impl Surface {
+    fn buffer_update(&self) {
+        if let Some(buffer) = self.state.lock().current().buffer.as_ref()
+            && let Some(panel_item) = self.panel_item.lock().upgrade()
+            && let Some(surface_id) = self.surface_id.get()
+        {
+            let (dmatex_uid, acquire, release) = buffer.update();
+            if matches!(self.role.get(), Some(SurfaceRole::Cursor)) {
+                panel_item
+                    .panel_shell()
+                    .update_cursor_dmatex(dmatex_uid, acquire, release);
+            } else {
+                tracing::trace!("calling update_surface_dmatex");
+                panel_item.panel_shell().update_surface_dmatex(
+                    surface_id.clone(),
+                    dmatex_uid,
+                    acquire,
+                    release,
+                    !buffer.is_transparent(),
+                );
+            }
+        }
+    }
+
+    #[tracing::instrument(level = "debug", skip_all)]
+    fn frame_event(&self) {
+        let callbacks = std::mem::take(&mut self.state_lock().current.frame_callbacks);
+        if !callbacks.is_empty() {
+            let _ = self.message_sink.send(Message::Frame(callbacks));
+        }
+    }
     fn on_commit(&self) {
         self.state.lock().apply();
         let mut handlers = self.on_commit_handlers.lock();
@@ -443,11 +466,7 @@ impl WlSurface for Surface {
     ) -> WaylandResult<()> {
         self.state.lock().pending.buffer = buffer.and_then(|b| {
             let buffer = client.get::<Buffer>(b)?;
-            let mut usage = Some(BufferUsage::new(client, &buffer));
-            Some(BufferState {
-                usage: usage.take_if(|_| buffer.uses_buffer_usage()),
-                buffer,
-            })
+            Some(buffer)
         });
         Ok(())
     }
@@ -510,10 +529,10 @@ impl WlSurface for Surface {
         _client: &mut Self::Connection,
         _sender_id: ObjectId,
     ) -> WaylandResult<()> {
-        info!("commit started");
+        tracing::trace!("commit started");
         self.on_commit();
 
-        info!("commit done");
+        tracing::trace!("commit done");
         Ok(())
     }
 

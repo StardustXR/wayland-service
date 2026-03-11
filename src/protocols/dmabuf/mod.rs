@@ -11,7 +11,7 @@ use crate::{
 use buffer_params::BufferParams;
 use drm_fourcc::DrmFourcc;
 use feedback::DmabufFeedback;
-use stardust_xr_cme::format::DmatexFormat;
+use stardust_xr_cme::format::{DmatexFormat, VulkanoFormatExtension};
 use waynest::ObjectId;
 use waynest_protocols::server::stable::linux_dmabuf_v1::zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1;
 use waynest_server::Client as _;
@@ -46,7 +46,18 @@ impl Dmabuf {
             .values()
             // we really need something more efficient than this lol
             .filter(|f| format!("{:?}", f.vk_format()).contains("SRGB"))
-            .flat_map(|f| f.variants().iter().map(|v| (f.drm_fourcc(), v.modifier)))
+            .flat_map(|f| {
+                f.vk_format()
+                    .to_drm_fourcc()
+                    .into_iter()
+                    .flatten()
+                    .cloned()
+                    .flat_map(|fourcc| {
+                        f.variants()
+                            .iter()
+                            .map(move |v| (fourcc.clone(), v.modifier))
+                    })
+            })
             .collect();
         let dmabuf = Self { version, formats };
 

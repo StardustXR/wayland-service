@@ -1,5 +1,5 @@
 use std::{
-    fs::File,
+    fs::{self, File},
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -60,6 +60,14 @@ impl Wayland {
 
         #[allow(unreachable_code)]
         Ok(())
+    }
+}
+impl Drop for Wayland {
+    fn drop(&mut self) {
+        let mut lock_name = self.socket_path.file_name().unwrap().to_os_string();
+        lock_name.push(".lock");
+        fs::remove_file(&self.socket_path).unwrap();
+        fs::remove_file(self.socket_path.with_file_name(lock_name)).unwrap();
     }
 }
 

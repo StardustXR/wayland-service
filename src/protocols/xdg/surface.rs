@@ -1,4 +1,5 @@
 use crate::{
+    CLIENT,
     client::{Client, Message},
     display::Display,
     error::{WaylandError, WaylandResult},
@@ -7,6 +8,7 @@ use crate::{
 
 use super::{popup::Popup, positioner::Positioner, toplevel::MappedInner};
 use mint::Vector2;
+use stardust_xr_fusion::spatial::{Spatial, Transform};
 use stardust_xr_panel_item::protocol::{ChildState, Rect, SurfaceId};
 use std::sync::Arc;
 use waynest::ObjectId;
@@ -86,6 +88,7 @@ impl XdgSurface for Surface {
             let Some(toplevel) = toplevel_weak.upgrade() else {
                 return true;
             };
+            tracing::info!("doing things");
 
             if first_commit {
                 let _ = message_tx.send(Message::ReconfigureToplevel(toplevel.clone()));
@@ -95,9 +98,13 @@ impl XdgSurface for Surface {
             let mut mapped_lock = toplevel.mapped.lock();
             if mapped_lock.is_none()
                 && configured.load(std::sync::atomic::Ordering::Relaxed)
-                && surface.currently_has_valid_buffer()
+                && dbg!(surface.currently_has_valid_buffer())
             {
-                let mapped_inner = MappedInner::create(&seat.upgrade().unwrap(), &toplevel, pid);
+                let spatial_ref = Spatial::create(CLIENT.wait().get_root(), Transform::identity())
+                    .unwrap()
+                    .as_spatial_ref();
+                let mapped_inner =
+                    MappedInner::create(&seat.upgrade().unwrap(), &toplevel, spatial_ref);
                 *surface.panel_item.lock() = Arc::downgrade(&mapped_inner.panel_item);
                 mapped_lock.replace(mapped_inner);
                 return false;

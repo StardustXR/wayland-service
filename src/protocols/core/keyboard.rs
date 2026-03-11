@@ -11,6 +11,7 @@ use std::{
     },
     sync::{Arc, LazyLock, Weak},
 };
+use tokio::sync::RwLock;
 use waynest::ObjectId;
 pub use waynest_protocols::server::core::wayland::wl_keyboard::*;
 
@@ -24,7 +25,7 @@ struct ModifierState {
     mods_locked: u32,
     group: u32,
 }
-static KEYMAPS: LazyLock<Mutex<SlotMap<DefaultKey, String>>> = LazyLock::new(Mutex::default);
+pub static KEYMAPS: LazyLock<RwLock<SlotMap<DefaultKey, String>>> = LazyLock::new(RwLock::default);
 
 impl ModifierState {
     fn update_key(&mut self, key: u32, pressed: bool) -> bool {
@@ -130,17 +131,10 @@ impl Keyboard {
             if *old_keymap_id != keymap_id {
                 let keymap_key = DefaultKey::from(KeyData::from_ffi(keymap_id));
 
-                // Get keymap data and drop the lock immediately
-                let keymap_data = {
-                    let keymap_lock = KEYMAPS.lock();
-                    keymap_lock
-                        .get(keymap_key)
-                        .map(|s| s.as_bytes().to_vec())
-                        .unwrap_or_default()
-                };
-
-                // Now we can safely await
-                self.send_keymap(client, &keymap_data).await?;
+                let keymap_lock = KEYMAPS.read().await;
+                if let Some(keymap_data) = keymap_lock.get(keymap_key).map(|s| s.as_bytes()) {
+                    self.send_keymap(client, &keymap_data).await?;
+                }
             };
             *old_keymap_id = keymap_id;
         }

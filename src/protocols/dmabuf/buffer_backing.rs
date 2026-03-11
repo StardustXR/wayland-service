@@ -3,7 +3,6 @@ use crate::{CLIENT, vulkan_ctx::VK};
 use super::buffer_params::BufferParams;
 use drm_fourcc::DrmFourcc;
 use mint::Vector2;
-use rand::random;
 use stardust_xr_fusion::{
     drawable::{self, DmatexPlane, DmatexSize},
     node::NodeError,
@@ -24,10 +23,10 @@ use waynest_protocols::server::stable::linux_dmabuf_v1::zwp_linux_buffer_params_
 pub struct DmabufBacking {
     size: Vector2<u32>,
     format: DrmFourcc,
-    modifier: u64,
+    _modifier: u64,
     timeline: Arc<TimelineSyncObj>,
     fds: Arc<Vec<AsyncFd<OwnedFd>>>,
-    dmatex_id: u64,
+    _dmatex_id: u64,
     dmatex_uid: u64,
     next_acquire_point: AtomicU64,
 }
@@ -42,7 +41,7 @@ impl DmabufBacking {
         tracing::info!("Creating new DmabufBacking");
         let client = CLIENT.wait();
         let vk = VK.wait();
-        let dmatex_id = random();
+        let dmatex_id = client.generate_id();
         let timeline = Arc::new(
             TimelineSyncObj::create(vk.render_dev.drm_node())
                 .map_err(DmatexImportError::TimelineCreationError)?,
@@ -60,7 +59,8 @@ impl DmabufBacking {
                 .export()
                 .map_err(DmatexImportError::TimelineExportError)?
                 .into(),
-        );
+        )
+        .unwrap();
         let dmatex_uid = drawable::export_dmatex_uid(client, dmatex_id)
             .await
             .map_err(DmatexImportError::DmatexExportError)?;
@@ -81,8 +81,8 @@ impl DmabufBacking {
             format,
             dmatex_uid,
             timeline,
-            dmatex_id,
-            modifier,
+            _dmatex_id: dmatex_id,
+            _modifier: modifier,
             next_acquire_point: AtomicU64::new(0),
             fds,
         })
@@ -117,6 +117,10 @@ impl DmabufBacking {
             }
         });
         (self.dmatex_uid, acquire, release)
+    }
+
+    pub fn timeline(&self) -> Arc<TimelineSyncObj> {
+        self.timeline.clone()
     }
 
     pub fn is_transparent(&self) -> bool {

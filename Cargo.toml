@@ -19,7 +19,7 @@ stardust-xr-fusion = { git = "https://github.com/StardustXR/core.git", version =
 stardust-xr-wire = { git = "https://github.com/StardustXR/core.git", version = "0.50.0" }
 stardust-xr-cme = { git = "https://github.com/StardustXR/cme.git", version = "0.50.0" }
 stardust-xr-molecules = { git = "https://github.com/StardustXR/molecules.git", version = "0.50.0" }
-stardust-xr-panel-item = { path = "../stardust-xr-panel-item" }
+stardust-xr-panel-item = { git = "https://github.com/Schmarni-Dev/panel-item" }
 vulkano = { git = "https://github.com/Schmarni-Dev/vulkano", branch = "0_35_dmabuf_fixes", default-features = false }
 
 [dependencies]
@@ -54,13 +54,17 @@ slotmap = "1.1.1"
 input-event-codes = "6.2.0"
 parking_lot = "0.12.5"
 mint.workspace = true
-# stardust-xr-gluon.workspace = true
+stardust-xr-gluon.workspace = true
 stardust-xr-fusion.workspace = true
+stardust-xr-molecules.workspace = true
 stardust-xr-cme.workspace = true
 stardust-xr-panel-item.workspace = true
-binderbinder.path="../binderbinder"
-pion-binder.path="../pion"
-gluon-wire.path="../gluon/gluon-wire"
+binderbinder.git = "https://github.com/Technobaboo/binderbinder"
+pion-binder.git = "https://github.com/Technobaboo/pion"
+gluon-wire.git = "https://github.com/Technobaboo/gluon"
+# binderbinder.path="../binderbinder"
+# pion-binder.path="../pion"
+# gluon-wire.path="../gluon/gluon-wire"
 vulkano.workspace = true
 rand = "0.10.0"
 rustc-hash = "2.1.1"

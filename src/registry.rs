@@ -139,14 +139,14 @@ impl Registry {
         )
         .await?;
 
-        self.global(
-            client,
-            sender_id,
-            RegistryGlobals::PRESENTATION,
-            Presentation::INTERFACE.to_string(),
-            Presentation::VERSION,
-        )
-        .await?;
+        // self.global(
+        //     client,
+        //     sender_id,
+        //     RegistryGlobals::PRESENTATION,
+        //     Presentation::INTERFACE.to_string(),
+        //     Presentation::VERSION,
+        // )
+        // .await?;
 
         self.global(
             client,

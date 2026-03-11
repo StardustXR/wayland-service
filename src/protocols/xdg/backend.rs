@@ -1,37 +1,78 @@
 use super::toplevel::Toplevel;
 use crate::{
+    BINDER_DEV, CLIENT,
     client::Message,
     protocols::core::{
+        keyboard::KEYMAPS,
         seat::{Seat, SeatMessage},
         surface::Surface,
     },
 };
-use binderbinder::TransactionHandler;
+use binderbinder::{TransactionHandler, binder_object::BinderObject};
 use dashmap::DashMap;
-use gluon_wire::GluonDataReader;
+use gluon_wire::{GluonDataReader, drop_tracking::DropNotifier};
+use slotmap::Key;
+use stardust_xr_fusion::spatial::SpatialRef;
 use stardust_xr_panel_item::protocol::{
-    ChildState, Geometry, PanelItemHandler, PanelShell, ScrollSource, SurfaceId,
+    ChildState, Geometry, KeymapId, PanelItem, PanelItemAcceptor, PanelItemHandler, PanelShell,
+    ScrollSource, SurfaceId,
 };
-use std::sync::Arc;
 use std::sync::Weak;
+use std::sync::{Arc, OnceLock};
+use tokio::sync::RwLock;
 use tracing;
 
 #[derive(Debug)]
 pub struct XdgBackend {
-    seat: Weak<Seat>,
+    _seat: Weak<Seat>,
     toplevel: Weak<Toplevel>,
-    panel_shell: PanelShell,
+    panel_shell: OnceLock<PanelShell>,
+    output_spatial: OnceLock<SpatialRef>,
     pub children: DashMap<u64, (Weak<Surface>, ChildState)>,
+    drop_notifs: RwLock<Vec<DropNotifier>>,
 }
 
 impl XdgBackend {
-    pub fn new(seat: &Arc<Seat>, toplevel: &Arc<Toplevel>, panel_shell: PanelShell) -> Self {
-        Self {
-            seat: Arc::downgrade(seat),
+    pub fn new(
+        seat: &Arc<Seat>,
+        toplevel: &Arc<Toplevel>,
+        panel_shell: PanelShell,
+        output_spatial_ref: SpatialRef,
+    ) -> Self {
+        let backend = Self {
+            _seat: Arc::downgrade(seat),
             toplevel: Arc::downgrade(toplevel),
             children: DashMap::new(),
-            panel_shell,
-        }
+            panel_shell: OnceLock::from(panel_shell),
+            output_spatial: OnceLock::from(output_spatial_ref),
+            drop_notifs: RwLock::default(),
+        };
+        backend.reset_input();
+        backend
+    }
+    pub async fn connect(
+        item_acceptor: PanelItemAcceptor,
+        seat: &Arc<Seat>,
+        toplevel: &Arc<Toplevel>,
+    ) -> Arc<BinderObject<XdgBackend>> {
+        let dev = BINDER_DEV.wait();
+        let item_backend = XdgBackend {
+            _seat: Arc::downgrade(seat),
+            toplevel: Arc::downgrade(toplevel),
+            children: DashMap::new(),
+            panel_shell: OnceLock::new(),
+            output_spatial: OnceLock::new(),
+            drop_notifs: RwLock::default(),
+        };
+        let obj = dev.register_object(item_backend);
+        let (shell, spatial_ref_id) = item_acceptor.accept(PanelItem::from_handler(&obj)).await;
+        let spatial_ref = SpatialRef::import(CLIENT.wait(), spatial_ref_id.id)
+            .await
+            .unwrap();
+        obj.panel_shell.set(shell).unwrap();
+        obj.output_spatial.set(spatial_ref).unwrap();
+        obj.reset_input();
+        obj
     }
 
     // Since XdgBackend is created and owned by Mapped which is owned by Toplevel,
@@ -43,7 +84,7 @@ impl XdgBackend {
     }
 
     pub fn panel_shell(&self) -> &PanelShell {
-        &self.panel_shell
+        self.panel_shell.get().unwrap()
     }
 
     fn surface_from_id(&self, id: &SurfaceId) -> Option<Arc<Surface>> {
@@ -63,7 +104,7 @@ impl XdgBackend {
         self.children
             .insert(id, (Arc::downgrade(surface), info.clone()));
 
-        self.panel_shell.create_child(info.clone());
+        self.panel_shell().create_child(info.clone());
     }
 
     pub fn reposition_child(&self, surface: &Arc<Surface>, geometry: Geometry) {
@@ -74,7 +115,7 @@ impl XdgBackend {
         if let Some(mut child) = self.children.get_mut(id) {
             child.1.geometry = geometry.clone();
         }
-        self.panel_shell.move_child(*id, geometry);
+        self.panel_shell().move_child(*id, geometry);
     }
 
     pub fn update_child_z_order(&self, surface: &Arc<Surface>, z_order: i32) {
@@ -87,7 +128,7 @@ impl XdgBackend {
             let info = child.1.clone();
             drop(child);
             // TODO: this seems very wrong, idk if we ever communicate the z order here
-            self.panel_shell.move_child(*id, info.geometry);
+            self.panel_shell().move_child(*id, info.geometry);
         }
     }
 
@@ -97,15 +138,21 @@ impl XdgBackend {
         };
         self.children.remove(id);
 
-        self.panel_shell.destroy_child(*id);
+        self.panel_shell().destroy_child(*id);
     }
 }
 impl PanelItemHandler for XdgBackend {
-    async fn register_xkb_keymap(
-        &self,
-        xkb_keymap: String,
-    ) -> stardust_xr_panel_item::protocol::KeymapId {
-        todo!()
+    async fn register_xkb_keymap(&self, xkb_keymap: String) -> KeymapId {
+        let slot =
+            if let Some((key, _)) = KEYMAPS.read().await.iter().find(|(_, v)| *v == &xkb_keymap) {
+                key
+            } else {
+                KEYMAPS.write().await.insert(xkb_keymap)
+            };
+
+        KeymapId {
+            id: slot.data().as_ffi(),
+        }
     }
 
     fn absolute_pointer_motion(
@@ -128,7 +175,7 @@ impl PanelItemHandler for XdgBackend {
 
     fn relative_pointer_motion(
         &self,
-        surface: SurfaceId,
+        _surface: SurfaceId,
         delta: stardust_xr_panel_item::protocol::Vec2,
     ) {
         let _ = self
@@ -202,13 +249,7 @@ impl PanelItemHandler for XdgBackend {
         }
     }
 
-    fn key(
-        &self,
-        surface: SurfaceId,
-        keymap: stardust_xr_panel_item::protocol::KeymapId,
-        key: u32,
-        pressed: bool,
-    ) {
+    fn key(&self, surface: SurfaceId, keymap: KeymapId, key: u32, pressed: bool) {
         tracing::debug!(
             "Backend: Keyboard key {} {}",
             key,
@@ -255,7 +296,7 @@ impl PanelItemHandler for XdgBackend {
 
     fn touch_move(
         &self,
-        surface: SurfaceId,
+        _surface: SurfaceId,
         id: u32,
         position: stardust_xr_panel_item::protocol::Vec2,
     ) {
@@ -277,9 +318,9 @@ impl PanelItemHandler for XdgBackend {
 
     fn touch_up(
         &self,
-        surface: SurfaceId,
+        _surface: SurfaceId,
         id: u32,
-        position: stardust_xr_panel_item::protocol::Vec2,
+        _position: stardust_xr_panel_item::protocol::Vec2,
     ) {
         tracing::debug!("Backend: Touch up {}", id);
         let toplevel = self.toplevel();
@@ -328,6 +369,10 @@ impl PanelItemHandler for XdgBackend {
                 toplevel: self.toplevel().clone(),
                 active: focused,
             });
+    }
+
+    async fn drop_notification_requested(&self, notifier: DropNotifier) {
+        self.drop_notifs.write().await.push(notifier);
     }
 }
 impl XdgBackend {
@@ -382,14 +427,14 @@ impl TransactionHandler for XdgBackend {
         &self,
         transaction: binderbinder::device::Transaction,
     ) -> binderbinder::payload::PayloadBuilder<'_> {
-        let data = GluonDataReader::from_payload(transaction.payload);
+        let mut data = GluonDataReader::from_payload(transaction.payload);
         self.dispatch_two_way(transaction.code, &mut data)
             .await
             .to_payload()
     }
 
     async fn handle_one_way(&self, transaction: binderbinder::device::Transaction) {
-        let data = GluonDataReader::from_payload(transaction.payload);
+        let mut data = GluonDataReader::from_payload(transaction.payload);
         self.dispatch_one_way(transaction.code, &mut data).await
     }
 }
