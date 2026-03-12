@@ -1,7 +1,9 @@
 use dashmap::{DashMap, DashSet};
 use memfd::MemfdOptions;
 use parking_lot::Mutex;
-use slotmap::{DefaultKey, KeyData, SlotMap};
+use rustc_hash::FxHashMap;
+use stardust_xr_fusion::items::panel::get_keymap;
+use stardust_xr_panel_item::protocol::KeymapId;
 use std::{
     collections::HashSet,
     io::Write,
@@ -11,11 +13,11 @@ use std::{
     },
     sync::{Arc, LazyLock, Weak},
 };
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, RwLockReadGuard};
 use waynest::ObjectId;
 pub use waynest_protocols::server::core::wayland::wl_keyboard::*;
 
-use crate::{client::Client, error::WaylandResult, protocols::core::surface::Surface};
+use crate::{CLIENT, client::Client, error::WaylandResult, protocols::core::surface::Surface};
 
 #[derive(Default)]
 struct ModifierState {
@@ -25,7 +27,40 @@ struct ModifierState {
     mods_locked: u32,
     group: u32,
 }
-pub static KEYMAPS: LazyLock<RwLock<SlotMap<DefaultKey, String>>> = LazyLock::new(RwLock::default);
+pub struct KeymapManager(LazyLock<RwLock<FxHashMap<u64, String>>>);
+impl KeymapManager {
+    const fn new() -> Self {
+        Self(LazyLock::new(RwLock::default))
+    }
+    pub async fn register(&self, keymap: String) -> KeymapId {
+        let id = if let Some((key, _)) = self.0.read().await.iter().find(|(_, v)| *v == &keymap) {
+            *key
+        } else {
+            let id = CLIENT.wait().generate_id();
+            self.0.write().await.insert(id, keymap);
+            id
+        };
+
+        KeymapId { id }
+    }
+    pub async fn get(&self, id: u64) -> Option<RwLockReadGuard<'_, str>> {
+        if let Ok(v) =
+            RwLockReadGuard::try_map(self.0.read().await, |v| v.get(&id).map(|s| s.as_str()))
+        {
+            return Some(v);
+        }
+        let sd_client = CLIENT.wait();
+        tracing::info!("getting keymap from the stardust server");
+        if let Ok(keymap_data) = get_keymap(sd_client, id).await {
+            self.0.write().await.insert(id, keymap_data);
+            return Some(RwLockReadGuard::map(self.0.read().await, |v| {
+                v.get(&id).unwrap().as_str()
+            }));
+        }
+        None
+    }
+}
+pub static KEYMAPS: KeymapManager = KeymapManager::new();
 
 impl ModifierState {
     fn update_key(&mut self, key: u32, pressed: bool) -> bool {
@@ -129,11 +164,8 @@ impl Keyboard {
             let mut old_keymap_id = self.current_keymap_id.lock();
 
             if *old_keymap_id != keymap_id {
-                let keymap_key = DefaultKey::from(KeyData::from_ffi(keymap_id));
-
-                let keymap_lock = KEYMAPS.read().await;
-                if let Some(keymap_data) = keymap_lock.get(keymap_key).map(|s| s.as_bytes()) {
-                    self.send_keymap(client, &keymap_data).await?;
+                if let Some(keymap_data) = KEYMAPS.get(keymap_id).await {
+                    self.send_keymap(client, keymap_data.as_bytes()).await?;
                 }
             };
             *old_keymap_id = keymap_id;

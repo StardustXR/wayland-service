@@ -2537,7 +2537,7 @@ dependencies = [
 [[package]]
 name = "stardust-xr-panel-item"
 version = "0.1.0"
-source = "git+https://github.com/StardustXR/panel-item#e278513f854baf39223ae8c9ad272abbfc01843f"
+source = "git+https://github.com/StardustXR/panel-item#627b5abd11efe2c22abff8780ae60c137ac1115b"
 dependencies = [
  "binderbinder",
  "derive-where",

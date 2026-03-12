@@ -11,7 +11,6 @@ use crate::{
 use binderbinder::{TransactionHandler, binder_object::BinderObject};
 use dashmap::DashMap;
 use gluon_wire::{GluonDataReader, drop_tracking::DropNotifier};
-use slotmap::Key;
 use stardust_xr_fusion::spatial::SpatialRef;
 use stardust_xr_panel_item::protocol::{
     ChildState, Geometry, KeymapId, PanelItem, PanelItemAcceptor, PanelItemHandler, PanelShell,
@@ -143,16 +142,7 @@ impl XdgBackend {
 }
 impl PanelItemHandler for XdgBackend {
     async fn register_xkb_keymap(&self, xkb_keymap: String) -> KeymapId {
-        let slot =
-            if let Some((key, _)) = KEYMAPS.read().await.iter().find(|(_, v)| *v == &xkb_keymap) {
-                key
-            } else {
-                KEYMAPS.write().await.insert(xkb_keymap)
-            };
-
-        KeymapId {
-            id: slot.data().as_ffi(),
-        }
+        KEYMAPS.register(xkb_keymap).await
     }
 
     fn absolute_pointer_motion(
@@ -296,7 +286,6 @@ impl PanelItemHandler for XdgBackend {
 
     fn touch_move(
         &self,
-        _surface: SurfaceId,
         id: u32,
         position: stardust_xr_panel_item::protocol::Vec2,
     ) {
@@ -318,9 +307,7 @@ impl PanelItemHandler for XdgBackend {
 
     fn touch_up(
         &self,
-        _surface: SurfaceId,
         id: u32,
-        _position: stardust_xr_panel_item::protocol::Vec2,
     ) {
         tracing::debug!("Backend: Touch up {}", id);
         let toplevel = self.toplevel();
