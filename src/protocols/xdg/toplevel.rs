@@ -75,6 +75,13 @@ impl Toplevel {
             data: Mutex::new(ToplevelData::default()),
         }
     }
+    pub async fn switch_panel_shell(&self, new_item: Arc<BinderObject<XdgBackend>>) {
+        if let Some(mapped) = self.mapped.lock().as_mut() {
+            // TODO: modify release target point so we can send an actual update
+            // without the client having to make a new commit
+            mapped.panel_item = new_item;
+        }
+    }
 
     pub fn wl_surface(&self) -> &Arc<Surface> {
         &self.xdg_surface.wl_surface

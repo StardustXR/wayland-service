@@ -2,19 +2,22 @@ use std::{
     env::args_os,
     path::PathBuf,
     sync::{Arc, OnceLock},
-    time::Duration,
 };
 
 use pion_binder::PionBinderDevice;
 use stardust_xr_fusion::{Client, ClientHandle, project_local_resources, zbus::Connection};
 use tracing_subscriber::EnvFilter;
 
-use crate::{frame_dispatcher::setup_frame_dispatcher, socket::Wayland, vulkan_ctx::VkContext};
+use crate::{
+    frame_dispatcher::setup_frame_dispatcher, panel_item_provider::PanelItemProvider,
+    socket::Wayland, vulkan_ctx::VkContext,
+};
 
 pub mod client;
 pub mod display;
 pub mod error;
 pub mod frame_dispatcher;
+pub mod panel_item_provider;
 pub mod panel_item_ui;
 pub mod protocols;
 pub mod registry;
@@ -52,7 +55,8 @@ async fn main() {
     _ = DBUS.set(conn);
     setup_frame_dispatcher(async_loop.get_event_handle(), client.get_root().clone());
 
-    let _wayland = Wayland::new(&wayland_socket_path).unwrap();
+    let wayland = Wayland::new(&wayland_socket_path).unwrap();
+    let _provider = PanelItemProvider::setup(BINDER_DEV.wait(), wayland.lock_path()).await;
 
     tokio::signal::ctrl_c().await.unwrap();
 }

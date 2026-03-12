@@ -15,7 +15,7 @@ use crate::{
 use binderbinder::binder_object::BinderObject;
 use mint::Vector2;
 use parking_lot::Mutex;
-use stardust_xr_panel_item::protocol::{Geometry, SurfaceId};
+use stardust_xr_panel_item::protocol::{Geometry, SurfaceId, SurfaceUpdateTarget};
 use std::{
     fmt::Display,
     sync::{Arc, OnceLock, Weak},
@@ -410,20 +410,19 @@ impl Surface {
             && let Some(surface_id) = self.surface_id.get()
         {
             let (dmatex_uid, acquire, release) = buffer.update();
-            if matches!(self.role.get(), Some(SurfaceRole::Cursor)) {
-                panel_item
-                    .panel_shell()
-                    .update_cursor_dmatex(dmatex_uid, acquire, release);
+            let surface_target = if matches!(self.role.get(), Some(SurfaceRole::Cursor)) {
+                SurfaceUpdateTarget::Cursor
             } else {
-                tracing::trace!("calling update_surface_dmatex");
-                panel_item.panel_shell().update_surface_dmatex(
-                    surface_id.clone(),
-                    dmatex_uid,
-                    acquire,
-                    release,
-                    !buffer.is_transparent(),
-                );
-            }
+                surface_id.clone().into()
+            };
+            tracing::trace!("calling update_surface_dmatex");
+            panel_item.panel_shell().update_surface_dmatex(
+                surface_target,
+                dmatex_uid,
+                acquire,
+                release,
+                !buffer.is_transparent(),
+            );
         }
     }
 

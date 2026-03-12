@@ -19,7 +19,7 @@ stardust-xr-fusion = { git = "https://github.com/StardustXR/core.git", version =
 stardust-xr-wire = { git = "https://github.com/StardustXR/core.git", version = "0.50.0" }
 stardust-xr-cme = { git = "https://github.com/StardustXR/cme.git", version = "0.50.0" }
 stardust-xr-molecules = { git = "https://github.com/StardustXR/molecules.git", version = "0.50.0" }
-stardust-xr-panel-item = { git = "https://github.com/Schmarni-Dev/panel-item" }
+stardust-xr-panel-item = { git = "https://github.com/StardustXR/panel-item" }
 vulkano = { git = "https://github.com/Schmarni-Dev/vulkano", branch = "0_35_dmabuf_fixes", default-features = false }
 
 [dependencies]

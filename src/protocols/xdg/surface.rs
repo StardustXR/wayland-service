@@ -88,7 +88,6 @@ impl XdgSurface for Surface {
             let Some(toplevel) = toplevel_weak.upgrade() else {
                 return true;
             };
-            tracing::info!("doing things");
 
             if first_commit {
                 let _ = message_tx.send(Message::ReconfigureToplevel(toplevel.clone()));
@@ -98,7 +97,7 @@ impl XdgSurface for Surface {
             let mut mapped_lock = toplevel.mapped.lock();
             if mapped_lock.is_none()
                 && configured.load(std::sync::atomic::Ordering::Relaxed)
-                && dbg!(surface.currently_has_valid_buffer())
+                && surface.currently_has_valid_buffer()
             {
                 let spatial_ref = Spatial::create(CLIENT.wait().get_root(), Transform::identity())
                     .unwrap()

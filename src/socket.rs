@@ -20,17 +20,18 @@ use crate::{
 
 pub struct Wayland {
     _lockfile: File,
-    abort_handle: AbortOnDrop,
+    _abort_handle: AbortOnDrop,
     socket_path: PathBuf,
+    lock_path: PathBuf,
 }
 impl Wayland {
     pub fn new(socket_path: &Path) -> WaylandResult<Self> {
-        let (socket_path, _lockfile) = create_socket(socket_path).ok_or(WaylandError::Io(
+        let (socket_path, _lockfile, lock_path) = create_socket(socket_path).ok_or(WaylandError::Io(
             std::io::ErrorKind::AddrNotAvailable.into(),
         ))?;
         let listener = waynest_server::Listener::new_with_path(&socket_path).unwrap();
         let socket_path = listener.socket_path().to_path_buf();
-        let abort_handle = tokio::spawn(
+        let _abort_handle = tokio::spawn(
             // || "Wayland socket accept loop",
             Self::handle_wayland_loop(listener),
         )
@@ -38,12 +39,16 @@ impl Wayland {
 
         Ok(Self {
             _lockfile,
-            abort_handle,
+            _abort_handle,
             socket_path,
+            lock_path
         })
     }
     pub fn socket_path(&self) -> &Path {
         &self.socket_path
+    }
+    pub fn lock_path(&self) -> &Path {
+        &self.lock_path
     }
     async fn handle_wayland_loop(mut listener: Listener) -> WaylandResult<()> {
         let mut clients = Vec::new();
@@ -71,7 +76,7 @@ impl Drop for Wayland {
     }
 }
 
-fn create_socket(socket_path: &Path) -> Option<(PathBuf, File)> {
+fn create_socket(socket_path: &Path) -> Option<(PathBuf, File, PathBuf)> {
     let socket_path = if socket_path.is_relative() {
         directories::BaseDirs::new()
             .unwrap()
@@ -83,9 +88,10 @@ fn create_socket(socket_path: &Path) -> Option<(PathBuf, File)> {
     };
     let mut lock_name = socket_path.file_name().unwrap().to_os_string();
     lock_name.push(".lock");
-    let lock_file = File::create(socket_path.with_file_name(lock_name)).ok()?;
+    let lock_path = socket_path.with_file_name(lock_name);
+    let lock_file = File::create(&lock_path).ok()?;
     lock_file.try_lock().ok()?;
-    Some((socket_path, lock_file))
+    Some((socket_path, lock_file, lock_path))
 }
 
 struct WaylandClient {
