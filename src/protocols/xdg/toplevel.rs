@@ -82,6 +82,9 @@ impl Toplevel {
             mapped.panel_item = new_item;
         }
     }
+    pub fn panel_item(&self) -> Option<Arc<BinderObject<XdgBackend>>> {
+        self.mapped.lock().as_ref().map(|v| v.panel_item.clone())
+    }
 
     pub fn wl_surface(&self) -> &Arc<Surface> {
         &self.xdg_surface.wl_surface

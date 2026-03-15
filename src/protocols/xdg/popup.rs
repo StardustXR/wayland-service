@@ -74,7 +74,7 @@ impl XdgPopup for Popup {
         .await?;
         self.surface.reconfigure(client).await?;
 
-        let Some(panel_item) = self.surface.wl_surface.panel_item.lock().upgrade() else {
+        let Some(panel_item) = self.surface.wl_surface.panel_item() else {
             return Ok(());
         };
         panel_item.reposition_child(&self.surface.wl_surface, geometry);
@@ -93,7 +93,7 @@ impl XdgPopup for Popup {
 }
 impl Drop for Popup {
     fn drop(&mut self) {
-        let Some(panel_item) = self.surface.wl_surface.panel_item.lock().upgrade() else {
+        let Some(panel_item) = self.surface.wl_surface.panel_item() else {
             return;
         };
         panel_item.remove_child(&self.surface.wl_surface);

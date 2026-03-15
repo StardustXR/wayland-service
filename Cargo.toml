@@ -14,12 +14,13 @@ members = ["display-socket-finder"]
 
 [workspace.dependencies]
 mint = "0.5.9"
-stardust-xr-gluon = { git = "https://github.com/StardustXR/core.git", version = "0.50.0" }
-stardust-xr-fusion = { git = "https://github.com/StardustXR/core.git", version = "0.50.0" }
-stardust-xr-wire = { git = "https://github.com/StardustXR/core.git", version = "0.50.0" }
-stardust-xr-cme = { git = "https://github.com/StardustXR/cme.git", version = "0.50.0" }
-stardust-xr-molecules = { git = "https://github.com/StardustXR/molecules.git", version = "0.50.0" }
+stardust-xr-gluon = { git = "https://github.com/StardustXR/core.git", version = "0.51.0" }
+stardust-xr-fusion = { git = "https://github.com/StardustXR/core.git", version = "0.51.0" }
+stardust-xr-wire = { git = "https://github.com/StardustXR/core.git", version = "0.51.0" }
+stardust-xr-cme = { git = "https://github.com/StardustXR/cme.git", version = "0.51.0" }
+stardust-xr-molecules = { git = "https://github.com/StardustXR/molecules.git", version = "0.51.0" }
 stardust-xr-panel-item = { git = "https://github.com/StardustXR/panel-item" }
+# stardust-xr-panel-item = { path = "../stardust-xr-panel-item" }
 vulkano = { git = "https://github.com/Schmarni-Dev/vulkano", branch = "0_35_dmabuf_fixes", default-features = false }
 
 [dependencies]

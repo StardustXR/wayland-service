@@ -151,12 +151,15 @@ impl Subsurface {
                 let Some(parent) = subsurface.surface.parent() else {
                     return true;
                 };
-                let Some(panel_item) = parent.panel_item.lock().upgrade() else {
+                let Some(toplevel) = parent.toplevel.get().cloned() else {
+                    return true;
+                };
+                let Some(panel_item) = parent.panel_item() else {
                     return true;
                 };
 
                 if surface.currently_has_valid_buffer() {
-                    *surface.panel_item.lock() = Arc::downgrade(&panel_item);
+                    surface.toplevel.set(toplevel);
                     let info = subsurface.create_child_info(surface.current_buffer_size());
                     panel_item.add_child(&subsurface.surface, info);
                     return false; // Remove handler after adding child once
@@ -180,7 +183,7 @@ impl Subsurface {
             let surface = subsurface.surface.clone();
 
             if surface.currently_has_valid_buffer()
-                && let Some(panel_item) = surface.panel_item.lock().upgrade()
+                && let Some(panel_item) = surface.panel_item()
             {
                 let state = subsurface.state.lock();
                 let subsurface_state = *state.current();
@@ -253,7 +256,7 @@ impl WlSubsurface for Subsurface {
     ) -> WaylandResult<()> {
         // Remove the child from the parent's backend
         if let Some(parent) = self.surface.parent() {
-            let Some(panel_item) = parent.panel_item.lock().upgrade() else {
+            let Some(panel_item) = parent.panel_item() else {
                 client.remove(self.id);
                 return Ok(());
             };
@@ -290,7 +293,7 @@ impl WlSubsurface for Subsurface {
         let sibling_z_order = if let Some(sibling_surface) = client.get::<Surface>(sibling)
             && let Some(SurfaceId::Child { id: sibling_id }) = sibling_surface.surface_id.get()
             && let Some(parent) = self.surface.parent()
-            && let Some(panel_item) = parent.panel_item.lock().upgrade()
+            && let Some(panel_item) = parent.panel_item()
             && let Some(child_entry) = panel_item.children.get(sibling_id)
         {
             child_entry.1.z_order
@@ -314,7 +317,7 @@ impl WlSubsurface for Subsurface {
         let sibling_z_order = if let Some(sibling_surface) = client.get::<Surface>(sibling)
             && let Some(SurfaceId::Child { id: sibling_id }) = sibling_surface.surface_id.get()
             && let Some(parent) = self.surface.parent()
-            && let Some(panel_item) = parent.panel_item.lock().upgrade()
+            && let Some(panel_item) = parent.panel_item()
             && let Some(child_entry) = panel_item.children.get(sibling_id)
         {
             child_entry.1.z_order

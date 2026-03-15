@@ -264,7 +264,7 @@ impl WlPointer for Pointer {
         hotspot_y: i32,
     ) -> WaylandResult<()> {
         if let Some(focused_surface) = self.focused_surface.lock().await.upgrade()
-            && let Some(panel_item) = focused_surface.panel_item.lock().upgrade()
+            && let Some(panel_item) = focused_surface.panel_item()
         {
             panel_item.panel_shell().set_cursor_visuals(
                 surface.and_then(|s| client.get::<Surface>(s)).map(|s| {

@@ -67,13 +67,13 @@ impl ZwpLinuxBufferParamsV1 for BufferParams {
         modifier_hi: u32,
         modifier_lo: u32,
     ) -> WaylandResult<()> {
-        let fd_num = fd.as_raw_fd();
-        tracing::info!(
-            "Adding plane {} with fd {} to BufferParams {:?}",
-            plane_idx,
-            fd_num,
-            self.id
-        );
+        // let fd_num = fd.as_raw_fd();
+        // tracing::info!(
+        //     "Adding plane {} with fd {} to BufferParams {:?}",
+        //     plane_idx,
+        //     fd_num,
+        //     self.id
+        // );
 
         let mut planes = self.planes.lock();
 

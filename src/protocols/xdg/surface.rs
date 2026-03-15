@@ -84,6 +84,7 @@ impl XdgSurface for Surface {
         let configured = self.configured.clone();
         let mut first_commit = true;
         let message_tx = client.message_sink().clone();
+        self.wl_surface.toplevel.set(toplevel_weak.clone());
         self.wl_surface.add_commit_handler(move |surface| {
             let Some(toplevel) = toplevel_weak.upgrade() else {
                 return true;
@@ -104,7 +105,7 @@ impl XdgSurface for Surface {
                     .as_spatial_ref();
                 let mapped_inner =
                     MappedInner::create(&seat.upgrade().unwrap(), &toplevel, spatial_ref);
-                *surface.panel_item.lock() = Arc::downgrade(&mapped_inner.panel_item);
+                // *surface.panel_item.lock() = Arc::downgrade(&mapped_inner.panel_item);
                 mapped_lock.replace(mapped_inner);
                 return false;
             }
@@ -141,7 +142,9 @@ impl XdgSurface for Surface {
                 message: "Parent surface does not exist",
             });
         };
-        *self.wl_surface.panel_item.lock() = parent.wl_surface.panel_item.lock().clone();
+        if let Some(toplevel) = parent.wl_surface.toplevel.get() {
+            _ = self.wl_surface.toplevel.set(toplevel.clone());
+        }
         let positioner = client.get::<Positioner>(positioner).unwrap();
 
         let surface = client.get::<Surface>(self.id).unwrap();
@@ -190,7 +193,7 @@ impl XdgSurface for Surface {
             let Some(popup) = popup_weak.upgrade() else {
                 return true;
             };
-            let Some(panel_item) = surface.panel_item.lock().upgrade() else {
+            let Some(panel_item) = surface.panel_item() else {
                 return true;
             };
 

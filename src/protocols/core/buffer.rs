@@ -3,7 +3,9 @@ use crate::error::WaylandResult;
 use crate::protocols::dmabuf::buffer_backing::DmabufBacking;
 
 use mint::Vector2;
+use stardust_xr_gluon::AbortOnDrop;
 use std::sync::Arc;
+use std::time::Duration;
 use waynest::ObjectId;
 pub use waynest_protocols::server::core::wayland::wl_buffer::*;
 use waynest_server::{Client as _, RequestDispatcher};
@@ -51,6 +53,11 @@ impl Buffer {
             let message_sink = self.message_sink.clone();
             let buffer = self.clone();
             async move {
+            
+                let task: AbortOnDrop = tokio::spawn(async {
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                    tracing::warn!("buffer not released for 500ms");
+                }).into();
                 timeline.wait_async(release).unwrap().await;
                 tracing::trace!("sending buffer release");
                 message_sink.send(crate::client::Message::ReleaseBuffer(buffer))

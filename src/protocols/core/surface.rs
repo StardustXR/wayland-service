@@ -5,7 +5,7 @@ use crate::{
     frame_dispatcher::FRAME_EVENT_PROVIDER,
     protocols::{
         presentation::{MonotonicTimestamp, PresentationFeedback},
-        xdg::backend::XdgBackend,
+        xdg::{backend::XdgBackend, toplevel::Toplevel},
     },
     util::{
         BufferedState, SurfaceCommitAwareBuffer, SurfaceCommitAwareBufferManager,
@@ -111,7 +111,7 @@ pub struct Surface {
     state: Arc<Mutex<SurfaceCommitAwareBuffer<SurfaceState>>>,
     pub message_sink: MessageSink,
     pub role: OnceLock<SurfaceRole>,
-    pub panel_item: Mutex<Weak<BinderObject<XdgBackend>>>,
+    // pub panel_item: Mutex<Weak<BinderObject<XdgBackend>>>,
     // pub panel_item: Mutex<Weak<PanelItem>>,
     requires_parent_sync: Mutex<Option<CommitFilter>>,
     on_commit_handlers: Mutex<Vec<OnCommitCallback>>,
@@ -120,6 +120,7 @@ pub struct Surface {
     state_buffer_manager: Arc<SurfaceCommitAwareBufferManager>,
     children: Registry<Surface>,
     parent: OnceLock<Weak<Surface>>,
+    pub toplevel: OnceLock<Weak<Toplevel>>,
 }
 impl std::fmt::Debug for Surface {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -152,7 +153,6 @@ impl Surface {
                 ),
                 message_sink: client.message_sink(),
                 role: OnceLock::new(),
-                panel_item: Mutex::new(Weak::default()),
                 requires_parent_sync: Mutex::new(None),
                 on_commit_handlers: Mutex::new(Vec::new()),
                 on_updated_current_state_handlers: Mutex::new(Vec::new()),
@@ -160,11 +160,11 @@ impl Surface {
                 state_buffer_manager: manager,
                 children: Registry::new(),
                 parent: OnceLock::new(),
+                toplevel: OnceLock::new(),
             }
         });
         surface.add_updated_current_state_handler(|surface| {
             surface.buffer_update();
-            surface.frame_event();
             true
         });
         tokio::spawn({
@@ -224,6 +224,9 @@ impl Surface {
     }
     pub fn currently_has_valid_buffer(&self) -> bool {
         self.state.lock().current().has_valid_buffer()
+    }
+    pub fn panel_item(&self) -> Option<Arc<BinderObject<XdgBackend>>> {
+        self.toplevel.get()?.upgrade()?.panel_item()
     }
 
     /// Set a filter that controls whether current state in SurfaceCommitAwareBuffers is updated on
@@ -370,7 +373,9 @@ impl Surface {
 
     pub fn set_parent(self: &Arc<Self>, parent: &Arc<Surface>) {
         // Copy parent's panel_item to subsurface (like popups do)
-        *self.panel_item.lock() = parent.panel_item.lock().clone();
+        if let Some(toplevel) = parent.toplevel.get() {
+            _ = self.toplevel.set(toplevel.clone());
+        }
         if self.parent.set(Arc::downgrade(parent)).is_ok() {
             parent.children.add_raw(self);
         }
@@ -406,7 +411,7 @@ impl Surface {
 impl Surface {
     fn buffer_update(&self) {
         if let Some(buffer) = self.state.lock().current().buffer.as_ref()
-            && let Some(panel_item) = self.panel_item.lock().upgrade()
+            && let Some(panel_item) = self.panel_item()
             && let Some(surface_id) = self.surface_id.get()
         {
             let (dmatex_uid, acquire, release) = buffer.update();
@@ -415,14 +420,17 @@ impl Surface {
             } else {
                 surface_id.clone().into()
             };
-            tracing::trace!("calling update_surface_dmatex");
-            panel_item.panel_shell().update_surface_dmatex(
-                surface_target,
-                dmatex_uid,
-                acquire,
-                release,
-                !buffer.is_transparent(),
-            );
+            // tracing::info!("calling update_surface_dmatex");
+            panel_item
+                .panel_shell()
+                .update_surface_dmatex(
+                    surface_target,
+                    dmatex_uid,
+                    acquire,
+                    release,
+                    !buffer.is_transparent(),
+                )
+                .unwrap();
         }
     }
 

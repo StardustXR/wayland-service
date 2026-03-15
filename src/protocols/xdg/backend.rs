@@ -8,7 +8,7 @@ use crate::{
         surface::Surface,
     },
 };
-use binderbinder::{TransactionHandler, binder_object::BinderObject};
+use binderbinder::{TransactionHandler, binder_object::BinderObject, payload::PayloadBuilder};
 use dashmap::DashMap;
 use gluon_wire::{GluonDataReader, drop_tracking::DropNotifier};
 use stardust_xr_fusion::spatial::SpatialRef;
@@ -64,13 +64,15 @@ impl XdgBackend {
             drop_notifs: RwLock::default(),
         };
         let obj = dev.register_object(item_backend);
-        let (shell, spatial_ref_id) = item_acceptor.accept(PanelItem::from_handler(&obj)).await;
+        let (shell, spatial_ref_id) = item_acceptor
+            .accept(PanelItem::from_handler(&obj))
+            .await
+            .unwrap();
         let spatial_ref = SpatialRef::import(CLIENT.wait(), spatial_ref_id.id)
             .await
             .unwrap();
         obj.panel_shell.set(shell).unwrap();
         obj.output_spatial.set(spatial_ref).unwrap();
-        obj.reset_input();
         obj
     }
 
@@ -103,7 +105,7 @@ impl XdgBackend {
         self.children
             .insert(id, (Arc::downgrade(surface), info.clone()));
 
-        self.panel_shell().create_child(info.clone());
+        self.panel_shell().create_child(info.clone()).unwrap();
     }
 
     pub fn reposition_child(&self, surface: &Arc<Surface>, geometry: Geometry) {
@@ -114,7 +116,7 @@ impl XdgBackend {
         if let Some(mut child) = self.children.get_mut(id) {
             child.1.geometry = geometry.clone();
         }
-        self.panel_shell().move_child(*id, geometry);
+        self.panel_shell().move_child(*id, geometry).unwrap();
     }
 
     pub fn update_child_z_order(&self, surface: &Arc<Surface>, z_order: i32) {
@@ -127,7 +129,7 @@ impl XdgBackend {
             let info = child.1.clone();
             drop(child);
             // TODO: this seems very wrong, idk if we ever communicate the z order here
-            self.panel_shell().move_child(*id, info.geometry);
+            self.panel_shell().move_child(*id, info.geometry).unwrap();
         }
     }
 
@@ -137,7 +139,7 @@ impl XdgBackend {
         };
         self.children.remove(id);
 
-        self.panel_shell().destroy_child(*id);
+        self.panel_shell().destroy_child(*id).unwrap();
     }
 }
 impl PanelItemHandler for XdgBackend {
@@ -284,11 +286,7 @@ impl PanelItemHandler for XdgBackend {
         }
     }
 
-    fn touch_move(
-        &self,
-        id: u32,
-        position: stardust_xr_panel_item::protocol::Vec2,
-    ) {
+    fn touch_move(&self, id: u32, position: stardust_xr_panel_item::protocol::Vec2) {
         tracing::debug!(
             "Backend: Touch move {} to ({}, {})",
             id,
@@ -305,10 +303,7 @@ impl PanelItemHandler for XdgBackend {
             }));
     }
 
-    fn touch_up(
-        &self,
-        id: u32,
-    ) {
+    fn touch_up(&self, id: u32) {
         tracing::debug!("Backend: Touch up {}", id);
         let toplevel = self.toplevel();
         let _ = toplevel
@@ -410,18 +405,20 @@ impl XdgBackend {
     }
 }
 impl TransactionHandler for XdgBackend {
-    async fn handle(
-        &self,
-        transaction: binderbinder::device::Transaction,
-    ) -> binderbinder::payload::PayloadBuilder<'_> {
+    async fn handle(&self, transaction: binderbinder::device::Transaction) -> PayloadBuilder<'_> {
         let mut data = GluonDataReader::from_payload(transaction.payload);
         self.dispatch_two_way(transaction.code, &mut data)
             .await
-            .to_payload()
+            .inspect_err(|err| tracing::error!("failed to dispatch transaction: {err}"))
+            .map(|v| v.to_payload())
+            .unwrap_or_else(|_| PayloadBuilder::new())
     }
 
     async fn handle_one_way(&self, transaction: binderbinder::device::Transaction) {
         let mut data = GluonDataReader::from_payload(transaction.payload);
-        self.dispatch_one_way(transaction.code, &mut data).await
+        _ = self
+            .dispatch_one_way(transaction.code, &mut data)
+            .await
+            .inspect_err(|err| tracing::error!("failed to dispatch one way: {err}"));
     }
 }

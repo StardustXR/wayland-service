@@ -1,9 +1,9 @@
 use super::Dmabuf;
-use crate::{CLIENT, client::Client, error::WaylandResult, vulkan_ctx::VK};
+use crate::{client::Client, error::WaylandResult, vulkan_ctx::VK};
 use memfd::MemfdOptions;
 use std::{
     io::Write,
-    os::fd::{AsFd as _, FromRawFd, IntoRawFd, OwnedFd},
+    os::fd::{AsFd as _, OwnedFd},
     sync::Arc,
 };
 use waynest::ObjectId;
@@ -17,7 +17,6 @@ pub struct DmabufFeedback(pub Arc<Dmabuf>);
 impl DmabufFeedback {
     #[tracing::instrument(level = "debug", skip_all)]
     pub async fn send_params(&self, client: &mut Client, sender_id: ObjectId) -> WaylandResult<()> {
-        let stardust_client = CLIENT.wait().clone();
         let primary_dev_id = VK.wait().render_dev.drm_node_id();
         let num_formats = self.0.formats.len();
         // Send format table first
@@ -72,7 +71,7 @@ impl DmabufFeedback {
             mfd.as_file().write_all(&0_u32.to_ne_bytes())?;
             mfd.as_file().write_all(&modifier.to_ne_bytes())?;
         }
-        let fd = unsafe { OwnedFd::from_raw_fd(mfd.into_raw_fd()) };
+        let fd = OwnedFd::from(mfd.into_file());
         self.format_table(client, sender_id, fd.as_fd(), size)
             .await?;
         Ok(())

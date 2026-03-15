@@ -1,6 +1,9 @@
-use std::sync::{Arc, Weak};
+use std::sync::{
+    Arc, OnceLock, Weak,
+    atomic::{AtomicBool, Ordering},
+};
 
-use binderbinder::{TransactionHandler, binder_object::BinderObject};
+use binderbinder::{TransactionHandler, binder_object::BinderObject, payload::PayloadBuilder};
 use gluon_wire::{GluonDataReader, drop_tracking::DropNotifier};
 use mint::{Vector2, Vector3};
 use stardust_xr_fusion::{
@@ -13,6 +16,7 @@ use stardust_xr_fusion::{
     spatial::{Spatial, SpatialAspect, SpatialRef, Transform},
     values::ResourceID,
 };
+use stardust_xr_gluon::AbortOnDrop;
 use stardust_xr_molecules::{FrameSensitive, Grabbable, GrabbableSettings, PointerMode, UIElement};
 use stardust_xr_panel_item::protocol::{
     ChildState, Geometry, PanelItem, PanelShell, PanelShellHandler, SurfaceUpdateTarget,
@@ -21,6 +25,7 @@ use tokio::{
     sync::{RwLock, broadcast::error::RecvError},
     task::JoinSet,
 };
+use tracing::trace;
 
 use crate::{
     BINDER_DEV, CLIENT, DBUS,
@@ -39,8 +44,10 @@ pub struct PanelItemUi {
     model: Model,
     field: Field,
     part: ModelPart,
+    input_task: OnceLock<AbortOnDrop>,
     grabbable: RwLock<Grabbable>,
     drop_notifs: RwLock<Vec<DropNotifier>>,
+    replaced: AtomicBool,
 }
 
 impl std::fmt::Debug for PanelItemUi {
@@ -116,11 +123,13 @@ impl PanelItemUi {
             part,
             grabbable: RwLock::new(grabbable),
             drop_notifs: RwLock::default(),
+            input_task: OnceLock::new(),
+            replaced: AtomicBool::new(false),
         });
         let panel_shell = PanelShell::from_handler(&obj);
         let backend = dev.register_object(XdgBackend::new(seat, toplevel, panel_shell, at));
         let panel_item = PanelItem::from_handler(&backend);
-        tokio::spawn({
+        let input_task = tokio::spawn({
             let obj = Arc::downgrade(&obj);
             async move {
                 let mut recv = FRAME_EVENT_PROVIDER.subscribe();
@@ -140,6 +149,7 @@ impl PanelItemUi {
                 }
             }
         });
+        _ = obj.input_task.set(input_task.into());
         let drop_future = panel_item.death_or_drop();
         tokio::spawn(async move {
             drop_future.await;
@@ -151,6 +161,9 @@ impl PanelItemUi {
         let mut grabbable = self.grabbable.write().await;
         if grabbable.handle_events() {
             grabbable.frame(&frame_info);
+        }
+        if self.replaced.load(Ordering::Relaxed) {
+            return;
         }
         let mut join_set = JoinSet::from_iter(ACCEPTORS.read().await.iter().cloned().map(
             |(field, acceptor)| {
@@ -168,6 +181,7 @@ impl PanelItemUi {
             let Ok((distance, acceptor)) = v else {
                 continue;
             };
+            trace!(distance);
             if distance <= 0.01 {
                 let Some(toplevel) = self.toplevel.upgrade() else {
                     break;
@@ -175,8 +189,11 @@ impl PanelItemUi {
                 let Some(seat) = self.seat.upgrade() else {
                     break;
                 };
+                tracing::info!("connecting to new panel item acceptor");
                 let obj = XdgBackend::connect(acceptor, &seat, &toplevel).await;
                 toplevel.switch_panel_shell(obj).await;
+                self.replaced.store(true, Ordering::Relaxed);
+                break;
             }
         }
     }
@@ -256,18 +273,20 @@ impl PanelShellHandler for PanelItemUi {
 }
 
 impl TransactionHandler for PanelItemUi {
-    async fn handle(
-        &self,
-        transaction: binderbinder::device::Transaction,
-    ) -> binderbinder::payload::PayloadBuilder<'_> {
+    async fn handle(&self, transaction: binderbinder::device::Transaction) -> PayloadBuilder<'_> {
         let mut data = GluonDataReader::from_payload(transaction.payload);
         self.dispatch_two_way(transaction.code, &mut data)
             .await
-            .to_payload()
+            .inspect_err(|err| tracing::error!("failed to dispatch transaction: {err}"))
+            .map(|v| v.to_payload())
+            .unwrap_or_else(|_| PayloadBuilder::new())
     }
 
     async fn handle_one_way(&self, transaction: binderbinder::device::Transaction) {
         let mut data = GluonDataReader::from_payload(transaction.payload);
-        self.dispatch_one_way(transaction.code, &mut data).await
+        _ = self
+            .dispatch_one_way(transaction.code, &mut data)
+            .await
+            .inspect_err(|err| tracing::error!("failed to dispatch one way: {err}"));
     }
 }
