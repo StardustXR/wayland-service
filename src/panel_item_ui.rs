@@ -145,6 +145,9 @@ impl PanelItemUi {
                     let Some(obj) = obj.upgrade() else {
                         break;
                     };
+                    if obj.replaced.load(Ordering::Relaxed) {
+                        break;
+                    }
                     obj.update_input(frame_info).await
                 }
             }
@@ -169,16 +172,22 @@ impl PanelItemUi {
             |(field, acceptor)| {
                 let ref_space = grabbable.content_parent().clone();
                 async move {
-                    (
+                    Some((
                         // TODO: try to do SDF <-> SDF intersection detection
-                        field.distance(&ref_space, [0.0; 3]).await.unwrap(),
+                        field
+                            .distance(&ref_space, [0.0; 3])
+                            .await
+                            .inspect_err(|err| {
+                                tracing::error!("failed to get field distance: {err}")
+                            })
+                            .ok()?,
                         acceptor,
-                    )
+                    ))
                 }
             },
         ));
         while let Some(v) = join_set.join_next().await {
-            let Ok((distance, acceptor)) = v else {
+            let Ok(Some((distance, acceptor))) = v else {
                 continue;
             };
             trace!(distance);
