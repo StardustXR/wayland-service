@@ -16,6 +16,7 @@ use vulkano::{
             DebugUtilsMessengerCallbackData, DebugUtilsMessengerCreateInfo,
         },
     },
+    memory::allocator::StandardMemoryAllocator,
 };
 
 pub struct VkContext {
@@ -25,6 +26,7 @@ pub struct VkContext {
     pub dev: Arc<Device>,
     pub queue: Arc<Queue>,
     pub cballoc: Arc<StandardCommandBufferAllocator>,
+    pub mem_alloc: Arc<StandardMemoryAllocator>,
 }
 pub static VK: OnceLock<VkContext> = OnceLock::new();
 impl VkContext {
@@ -78,13 +80,15 @@ impl VkContext {
             dev.clone(),
             Default::default(),
         ));
-        VK.set(Self {
+        let mem_alloc = Arc::new(StandardMemoryAllocator::new_default(dev.clone()));
+        _ = VK.set(Self {
             render_dev,
             instance,
             phys_dev,
             dev,
             queue,
             cballoc,
+            mem_alloc,
         });
     }
     pub fn get() -> &'static Self {

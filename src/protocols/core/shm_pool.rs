@@ -1,5 +1,12 @@
 // use super::shm_buffer_backing::ShmBufferBacking;
-use crate::{client::Client, error::WaylandResult, protocols::core::buffer::{Buffer, BufferBacking}};
+use crate::{
+    client::Client,
+    error::WaylandResult,
+    protocols::core::{
+        buffer::{Buffer, BufferBacking},
+        shm_buffer_backing::ShmBufferBacking,
+    },
+};
 use memmap2::{MmapOptions, RemapOptions};
 use parking_lot::{Mutex, MutexGuard, RawMutex, lock_api::MappedMutexGuard};
 use std::os::fd::{AsRawFd, OwnedFd};
@@ -52,15 +59,18 @@ impl WlShmPool for ShmPool {
         stride: i32,
         format: Format,
     ) -> WaylandResult<()> {
-        // let params = ShmBufferBacking::new(
-        //     client.get::<ShmPool>(sender_id).unwrap(),
-        //     offset as usize,
-        //     stride as usize,
-        //     [width as usize, height as usize].into(),
-        //     format,
-        // );
-        //
-        // Buffer::new(client, id, BufferBacking::Shm(params))?;
+        let params = ShmBufferBacking::new(
+            client.get::<ShmPool>(sender_id).unwrap(),
+            offset as usize,
+            stride as usize,
+            [width as u64, height as u64].into(),
+            format,
+        )
+        .await
+        // TODO: properly handle errors
+        .unwrap();
+
+        Buffer::new(client, id, BufferBacking::Shm(params))?;
         Ok(())
     }
 

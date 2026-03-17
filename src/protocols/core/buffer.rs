@@ -1,5 +1,6 @@
 use crate::client::{Client, MessageSink};
 use crate::error::WaylandResult;
+use crate::protocols::core::shm_buffer_backing::ShmBufferBacking;
 use crate::protocols::dmabuf::buffer_backing::DmabufBacking;
 
 use mint::Vector2;
@@ -12,7 +13,7 @@ use waynest_server::{Client as _, RequestDispatcher};
 
 #[derive(Debug)]
 pub enum BufferBacking {
-    // Shm(ShmBufferBacking),
+    Shm(ShmBufferBacking),
     Dmabuf(DmabufBacking),
 }
 
@@ -45,16 +46,18 @@ impl Buffer {
     pub fn update(self: &Arc<Self>) -> (u64, u64, u64) {
         let (dmatex_uid, acquire, release) = match &self.backing {
             BufferBacking::Dmabuf(backing) => backing.update(),
+            BufferBacking::Shm(backing) => backing.update(),
         };
         let timeline = match &self.backing {
             BufferBacking::Dmabuf(backing) => backing.timeline(),
+            BufferBacking::Shm(backing) => backing.timeline(),
         };
         tokio::spawn({
             let message_sink = self.message_sink.clone();
             let buffer = self.clone();
             async move {
             
-                let task: AbortOnDrop = tokio::spawn(async {
+                let _task: AbortOnDrop = tokio::spawn(async {
                     tokio::time::sleep(Duration::from_millis(500)).await;
                     tracing::warn!("buffer not released for 500ms");
                 }).into();
@@ -68,14 +71,14 @@ impl Buffer {
 
     pub fn is_transparent(&self) -> bool {
         match &self.backing {
-            // BufferBacking::Shm(backing) => backing.is_transparent(),
+            BufferBacking::Shm(backing) => backing.is_transparent(),
             BufferBacking::Dmabuf(backing) => backing.is_transparent(),
         }
     }
 
     pub fn size(&self) -> Vector2<usize> {
         match &self.backing {
-            // BufferBacking::Shm(backing) => backing.size(),
+            BufferBacking::Shm(backing) => backing.size(),
             BufferBacking::Dmabuf(backing) => backing.size(),
         }
     }
