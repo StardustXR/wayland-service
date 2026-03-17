@@ -2,6 +2,7 @@ use super::toplevel::Toplevel;
 use crate::{
     BINDER_DEV, CLIENT,
     client::Message,
+    panel_item_ui::PanelItemUi,
     protocols::core::{
         keyboard::KEYMAPS,
         seat::{Seat, SeatMessage},
@@ -12,6 +13,7 @@ use binderbinder::{TransactionHandler, binder_object::BinderObject, payload::Pay
 use dashmap::DashMap;
 use gluon_wire::{GluonDataReader, drop_tracking::DropNotifier};
 use stardust_xr_fusion::spatial::SpatialRef;
+use stardust_xr_gluon::AbortOnDrop;
 use stardust_xr_panel_item::protocol::{
     ChildState, Geometry, KeymapId, PanelItem, PanelItemAcceptor, PanelItemHandler, PanelShell,
     ScrollSource, SurfaceId,
@@ -21,14 +23,27 @@ use std::sync::{Arc, OnceLock};
 use tokio::sync::RwLock;
 use tracing;
 
-#[derive(Debug)]
 pub struct XdgBackend {
-    _seat: Weak<Seat>,
+    seat: Weak<Seat>,
     toplevel: Weak<Toplevel>,
     panel_shell: OnceLock<PanelShell>,
     output_spatial: OnceLock<SpatialRef>,
     pub children: DashMap<u64, (Weak<Surface>, ChildState)>,
     drop_notifs: RwLock<Vec<DropNotifier>>,
+    task: OnceLock<AbortOnDrop>,
+}
+
+impl std::fmt::Debug for XdgBackend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("XdgBackend")
+            .field("_seat", &self.seat)
+            .field("toplevel", &self.toplevel)
+            .field("panel_shell", &self.panel_shell)
+            .field("output_spatial", &self.output_spatial)
+            .field("children", &self.children)
+            .field("drop_notifs", &self.drop_notifs)
+            .finish()
+    }
 }
 
 impl XdgBackend {
@@ -39,12 +54,13 @@ impl XdgBackend {
         output_spatial_ref: SpatialRef,
     ) -> Self {
         let backend = Self {
-            _seat: Arc::downgrade(seat),
+            seat: Arc::downgrade(seat),
             toplevel: Arc::downgrade(toplevel),
             children: DashMap::new(),
             panel_shell: OnceLock::from(panel_shell),
             output_spatial: OnceLock::from(output_spatial_ref),
             drop_notifs: RwLock::default(),
+            task: OnceLock::new(),
         };
         backend.reset_input();
         backend
@@ -56,12 +72,13 @@ impl XdgBackend {
     ) -> Arc<BinderObject<XdgBackend>> {
         let dev = BINDER_DEV.wait();
         let item_backend = XdgBackend {
-            _seat: Arc::downgrade(seat),
+            seat: Arc::downgrade(seat),
             toplevel: Arc::downgrade(toplevel),
             children: DashMap::new(),
             panel_shell: OnceLock::new(),
             output_spatial: OnceLock::new(),
             drop_notifs: RwLock::default(),
+            task: OnceLock::new(),
         };
         let obj = dev.register_object(item_backend);
         let (shell, spatial_ref_id) = item_acceptor
@@ -71,8 +88,23 @@ impl XdgBackend {
         let spatial_ref = SpatialRef::import(CLIENT.wait(), spatial_ref_id.id)
             .await
             .unwrap();
+        let drop_future = shell.death_or_drop();
         obj.panel_shell.set(shell).unwrap();
         obj.output_spatial.set(spatial_ref).unwrap();
+        tokio::spawn({
+            let obj = Arc::downgrade(&obj);
+            async move {
+                drop_future.await;
+                if let Some(obj) = obj.upgrade() {
+                    let shell = PanelItemUi::new(
+                        obj.output_spatial.get().unwrap().clone(),
+                        &obj.seat.upgrade().unwrap(),
+                        &obj.toplevel(),
+                    );
+                    obj.toplevel().switch_panel_shell(shell).await;
+                }
+            }
+        });
         obj
     }
 

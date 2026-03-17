@@ -1580,7 +1580,7 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 [[package]]
 name = "pion-binder"
 version = "0.1.0"
-source = "git+https://github.com/Technobaboo/pion#af700bdacce4e3567221479292fe11bc781f42e5"
+source = "git+https://github.com/Technobaboo/pion#2489e094d91b82ecba70ae8745980b3a1cf65d76"
 dependencies = [
  "async-trait",
  "binderbinder",
@@ -2081,8 +2081,7 @@ dependencies = [
 
 [[package]]
 name = "stardust-xr-fusion"
-version = "0.51.0"
-source = "git+https://github.com/StardustXR/core.git#d0cd4f005f9fac1c8c9f1c8c95e07c1c3c39842b"
+version = "0.51.1"
 dependencies = [
  "color-eyre",
  "convert_case 0.8.0",
@@ -2095,7 +2094,7 @@ dependencies = [
  "rustc-hash",
  "serde",
  "serde_repr",
- "stardust-xr-gluon",
+ "stardust-xr-gluon 0.51.1",
  "stardust-xr-protocol",
  "stardust-xr-wire",
  "syn 2.0.117",
@@ -2107,8 +2106,20 @@ dependencies = [
 
 [[package]]
 name = "stardust-xr-gluon"
-version = "0.51.0"
-source = "git+https://github.com/StardustXR/core.git#d0cd4f005f9fac1c8c9f1c8c95e07c1c3c39842b"
+version = "0.51.1"
+dependencies = [
+ "futures",
+ "nanoid",
+ "tokio",
+ "tokio-stream",
+ "variadics_please",
+ "zbus",
+]
+
+[[package]]
+name = "stardust-xr-gluon"
+version = "0.51.1"
+source = "git+https://github.com/StardustXR/core.git#3ffb5dfa2f4fdda03f8bb860fb44fade1151b4ff"
 dependencies = [
  "futures",
  "nanoid",
@@ -2139,7 +2150,7 @@ dependencies = [
 [[package]]
 name = "stardust-xr-panel-item"
 version = "0.1.0"
-source = "git+https://github.com/StardustXR/panel-item#fb0b8a1347c5d072beb1ae7dc8629568fe1ae550"
+source = "git+https://github.com/StardustXR/panel-item#09faf0d29db68116389f9d191a5a32fd3c671d46"
 dependencies = [
  "binderbinder",
  "gluon-codegen-rust",
@@ -2156,8 +2167,7 @@ dependencies = [
 
 [[package]]
 name = "stardust-xr-protocol"
-version = "0.51.0"
-source = "git+https://github.com/StardustXR/core.git#d0cd4f005f9fac1c8c9f1c8c95e07c1c3c39842b"
+version = "0.51.1"
 dependencies = [
  "fnv",
  "kdl",
@@ -2187,7 +2197,7 @@ dependencies = [
  "slotmap",
  "stardust-xr-cme",
  "stardust-xr-fusion",
- "stardust-xr-gluon",
+ "stardust-xr-gluon 0.51.1 (git+https://github.com/StardustXR/core.git)",
  "stardust-xr-molecules",
  "stardust-xr-panel-item",
  "thiserror 2.0.18",
@@ -2204,8 +2214,7 @@ dependencies = [
 
 [[package]]
 name = "stardust-xr-wire"
-version = "0.51.0"
-source = "git+https://github.com/StardustXR/core.git#d0cd4f005f9fac1c8c9f1c8c95e07c1c3c39842b"
+version = "0.51.1"
 dependencies = [
  "dirs",
  "flatbuffers",

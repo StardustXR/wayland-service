@@ -39,32 +39,38 @@ impl PanelItemProviderHandler for PanelItemProvider {
         tokio::spawn(async move {
             let field = acceptor.get_field().await.unwrap();
             let field_ref = FieldRef::import(CLIENT.wait(), field.id).await.unwrap();
-            ACCEPTORS.write().await.push((field_ref, acceptor));
+            ACCEPTORS.write().await.push((field_ref, acceptor.clone()));
+            tokio::spawn(async move {
+                acceptor.death_or_drop().await;
+                remove_acceptor(acceptor).await;
+            })
         });
     }
 
     fn drop_acceptor(&self, acceptor: PanelItemAcceptor) {
         tokio::spawn(async move {
-            ACCEPTORS.write().await.retain(|(_, a)| !match (
-                a.to_binder_object_or_ref(),
-                acceptor.to_binder_object_or_ref(),
-            ) {
-                (BinderObjectOrRef::Ref(a), BinderObjectOrRef::Ref(b)) => Arc::ptr_eq(&a, &b),
-                (BinderObjectOrRef::WeakRef(a), BinderObjectOrRef::WeakRef(b)) => {
-                    Arc::ptr_eq(&a, &b)
-                }
-                // Realistically if we have local panel item acceptors we have quite
-                // a few more important issues than leaking them
-                (BinderObjectOrRef::Object(_), BinderObjectOrRef::Object(_)) => false,
-                (BinderObjectOrRef::WeakObject(_), BinderObjectOrRef::WeakObject(_)) => false,
-                _ => false,
-            });
+            remove_acceptor(acceptor).await;
         });
     }
 
     async fn drop_notification_requested(&self, notifier: gluon_wire::drop_tracking::DropNotifier) {
         self.drop_notifs.write().await.push(notifier);
     }
+}
+
+async fn remove_acceptor(acceptor: PanelItemAcceptor) {
+    ACCEPTORS.write().await.retain(|(_, a)| !match (
+        a.to_binder_object_or_ref(),
+        acceptor.to_binder_object_or_ref(),
+    ) {
+        (BinderObjectOrRef::Ref(a), BinderObjectOrRef::Ref(b)) => Arc::ptr_eq(&a, &b),
+        (BinderObjectOrRef::WeakRef(a), BinderObjectOrRef::WeakRef(b)) => Arc::ptr_eq(&a, &b),
+        // Realistically if we have local panel item acceptors we have quite
+        // a few more important issues than leaking them
+        (BinderObjectOrRef::Object(_), BinderObjectOrRef::Object(_)) => false,
+        (BinderObjectOrRef::WeakObject(_), BinderObjectOrRef::WeakObject(_)) => false,
+        _ => false,
+    });
 }
 
 impl TransactionHandler for PanelItemProvider {
@@ -79,7 +85,8 @@ impl TransactionHandler for PanelItemProvider {
 
     async fn handle_one_way(&self, transaction: binderbinder::device::Transaction) {
         let mut data = GluonDataReader::from_payload(transaction.payload);
-        self.dispatch_one_way(transaction.code, &mut data)
+        _ = self
+            .dispatch_one_way(transaction.code, &mut data)
             .await
             .inspect_err(|err| tracing::error!("failed to dispatch one way: {err}"));
     }
