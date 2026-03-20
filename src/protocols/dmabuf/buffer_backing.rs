@@ -26,7 +26,7 @@ pub struct DmabufBacking {
     _modifier: u64,
     timeline: Arc<TimelineSyncObj>,
     fds: Arc<Vec<AsyncFd<OwnedFd>>>,
-    _dmatex_id: u64,
+    dmatex_id: u64,
     dmatex_uid: u64,
     next_acquire_point: AtomicU64,
 }
@@ -81,7 +81,7 @@ impl DmabufBacking {
             format,
             dmatex_uid,
             timeline,
-            _dmatex_id: dmatex_id,
+            dmatex_id,
             _modifier: modifier,
             next_acquire_point: AtomicU64::new(0),
             fds,
@@ -147,6 +147,11 @@ impl DmabufBacking {
 
     pub fn size(&self) -> Vector2<usize> {
         [self.size.x as usize, self.size.y as usize].into()
+    }
+}
+impl Drop for DmabufBacking {
+    fn drop(&mut self) {
+        drawable::unregister_dmatex(CLIENT.wait(), self.dmatex_id).unwrap();
     }
 }
 #[derive(Debug, thiserror::Error)]
