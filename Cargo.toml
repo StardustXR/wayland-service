@@ -15,9 +15,6 @@ panic = "abort"
 [workspace]
 members = ["display-socket-finder"]
 
-[patch."https://github.com/StardustXR/core.git"]
-stardust-xr-fusion.path = "../core/fusion"
-
 [workspace.dependencies]
 mint = "0.5.9"
 stardust-xr-gluon = { git = "https://github.com/StardustXR/core.git", version = "0.51.0" }
