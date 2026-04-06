@@ -251,7 +251,7 @@ dependencies = [
 [[package]]
 name = "binderbinder"
 version = "0.1.0"
-source = "git+https://github.com/Technobaboo/binderbinder#6844fa6f95841119bac65ef306fc1f2760483a07"
+source = "git+https://github.com/Technobaboo/binderbinder#6c469c6dac04fc38dcae07dbef11a6f9b1495638"
 dependencies = [
  "async-trait",
  "bitflags 2.11.0",
@@ -891,7 +891,7 @@ dependencies = [
 [[package]]
 name = "gluon-codegen-rust"
 version = "0.1.0"
-source = "git+https://github.com/Technobaboo/gluon#f93a26d06c0ba76bfcda24edb1ed76f8bc530a2f"
+source = "git+https://github.com/Technobaboo/gluon#d4ee6d48ab398e1db139861b44d89cca24a03a21"
 dependencies = [
  "convert_case 0.11.0",
  "gluon-parser",
@@ -903,7 +903,7 @@ dependencies = [
 [[package]]
 name = "gluon-parser"
 version = "0.1.0"
-source = "git+https://github.com/Technobaboo/gluon#f93a26d06c0ba76bfcda24edb1ed76f8bc530a2f"
+source = "git+https://github.com/Technobaboo/gluon#d4ee6d48ab398e1db139861b44d89cca24a03a21"
 dependencies = [
  "binderbinder",
  "chumsky",
@@ -912,9 +912,10 @@ dependencies = [
 [[package]]
 name = "gluon-wire"
 version = "0.1.0"
-source = "git+https://github.com/Technobaboo/gluon#f93a26d06c0ba76bfcda24edb1ed76f8bc530a2f"
+source = "git+https://github.com/Technobaboo/gluon#d4ee6d48ab398e1db139861b44d89cca24a03a21"
 dependencies = [
  "binderbinder",
+ "rustix",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -2082,6 +2083,7 @@ dependencies = [
 [[package]]
 name = "stardust-xr-fusion"
 version = "0.51.1"
+source = "git+https://github.com/StardustXR/core.git#3ffb5dfa2f4fdda03f8bb860fb44fade1151b4ff"
 dependencies = [
  "color-eyre",
  "convert_case 0.8.0",
@@ -2094,25 +2096,13 @@ dependencies = [
  "rustc-hash",
  "serde",
  "serde_repr",
- "stardust-xr-gluon 0.51.1",
+ "stardust-xr-gluon",
  "stardust-xr-protocol",
  "stardust-xr-wire",
  "syn 2.0.117",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
- "zbus",
-]
-
-[[package]]
-name = "stardust-xr-gluon"
-version = "0.51.1"
-dependencies = [
- "futures",
- "nanoid",
- "tokio",
- "tokio-stream",
- "variadics_please",
  "zbus",
 ]
 
@@ -2150,7 +2140,7 @@ dependencies = [
 [[package]]
 name = "stardust-xr-panel-item"
 version = "0.1.0"
-source = "git+https://github.com/StardustXR/panel-item#09faf0d29db68116389f9d191a5a32fd3c671d46"
+source = "git+https://github.com/StardustXR/panel-item#326428c045b8484c15777c1f7eeeb9e74db72b80"
 dependencies = [
  "binderbinder",
  "gluon-codegen-rust",
@@ -2168,6 +2158,7 @@ dependencies = [
 [[package]]
 name = "stardust-xr-protocol"
 version = "0.51.1"
+source = "git+https://github.com/StardustXR/core.git#3ffb5dfa2f4fdda03f8bb860fb44fade1151b4ff"
 dependencies = [
  "fnv",
  "kdl",
@@ -2197,7 +2188,7 @@ dependencies = [
  "slotmap",
  "stardust-xr-cme",
  "stardust-xr-fusion",
- "stardust-xr-gluon 0.51.1 (git+https://github.com/StardustXR/core.git)",
+ "stardust-xr-gluon",
  "stardust-xr-molecules",
  "stardust-xr-panel-item",
  "thiserror 2.0.18",
@@ -2215,6 +2206,7 @@ dependencies = [
 [[package]]
 name = "stardust-xr-wire"
 version = "0.51.1"
+source = "git+https://github.com/StardustXR/core.git#3ffb5dfa2f4fdda03f8bb860fb44fade1151b4ff"
 dependencies = [
  "dirs",
  "flatbuffers",
@@ -2278,7 +2270,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.2",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",

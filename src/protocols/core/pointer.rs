@@ -6,7 +6,7 @@ use stardust_xr_panel_item::protocol::{Geometry, ScrollSource};
 use std::sync::Arc;
 use std::sync::Weak;
 use tokio::sync::{Mutex, RwLock};
-use tracing::{self, info, warn};
+use tracing::{self};
 use waynest::ObjectId;
 use waynest_server::Client as _;
 
@@ -147,28 +147,98 @@ impl Pointer {
         delta: Vector2<f32>,
         source: ScrollSource,
     ) -> WaylandResult<()> {
-        tracing::debug!("Handling discrete pointer scroll: steps={:?}", delta);
+        tracing::info!(
+            "Handling discrete pointer scroll: steps={:?} on version {}",
+            delta,
+            self.version
+        );
+        let horizontal = delta.x != 0.0;
+        let vertical = delta.y != 0.0;
+        // cage doesn't forward scroll without this
+        if self.version >= 5 {
+            self.axis_source(
+                client,
+                self.id,
+                match source {
+                    ScrollSource::Wheel => AxisSource::Wheel,
+                    ScrollSource::Touch => AxisSource::Finger,
+                    ScrollSource::Continuous => AxisSource::Continuous,
+                    ScrollSource::WheelTilt => AxisSource::WheelTilt,
+                },
+            )
+            .await?;
+        }
+        if self.version >= 9 {
+            if horizontal {
+                self.axis_relative_direction(
+                    client,
+                    self.id,
+                    Axis::HorizontalScroll,
+                    // TODO: expose over panel item?
+                    AxisRelativeDirection::Identical,
+                )
+                .await?;
+            }
+            if vertical {
+                self.axis_relative_direction(
+                    client,
+                    self.id,
+                    Axis::VerticalScroll,
+                    // TODO: expose over panel item?
+                    AxisRelativeDirection::Identical,
+                )
+                .await?;
+            }
+        }
+        if vertical {
+            self.axis(
+                client,
+                self.id,
+                0, // time
+                Axis::VerticalScroll,
+                (delta.y as f64).into(),
+            )
+            .await?;
+        }
+        if horizontal {
+            self.axis(
+                client,
+                self.id,
+                0, // time
+                Axis::HorizontalScroll,
+                (delta.x as f64).into(),
+            )
+            .await?;
+        }
         if self.version < 8 && self.version >= 5 {
-            self.axis_discrete(client, self.id, Axis::HorizontalScroll, delta.x as i32)
-                .await?;
-            self.axis_discrete(client, self.id, Axis::VerticalScroll, delta.y as i32)
-                .await?;
+            if horizontal {
+                self.axis_discrete(client, self.id, Axis::HorizontalScroll, delta.x as i32)
+                    .await?;
+            }
+            if vertical {
+                self.axis_discrete(client, self.id, Axis::VerticalScroll, delta.y as i32)
+                    .await?;
+            }
         }
         if self.version >= 8 {
-            self.axis_value120(
-                client,
-                self.id,
-                Axis::HorizontalScroll,
-                (delta.x * 120.) as i32,
-            )
-            .await?;
-            self.axis_value120(
-                client,
-                self.id,
-                Axis::VerticalScroll,
-                (delta.y * 120.) as i32,
-            )
-            .await?;
+            if horizontal {
+                self.axis_value120(
+                    client,
+                    self.id,
+                    Axis::HorizontalScroll,
+                    (delta.x * 120.) as i32,
+                )
+                .await?;
+            }
+            if vertical {
+                self.axis_value120(
+                    client,
+                    self.id,
+                    Axis::VerticalScroll,
+                    (delta.y * 120.) as i32,
+                )
+                .await?;
+            }
         }
         if self.version >= 5 {
             self.frame(client, self.id).await?;

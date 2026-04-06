@@ -11,7 +11,7 @@ use crate::{
 };
 use binderbinder::{TransactionHandler, binder_object::BinderObject, payload::PayloadBuilder};
 use dashmap::DashMap;
-use gluon_wire::{GluonDataReader, drop_tracking::DropNotifier};
+use gluon_wire::{GluonCtx, GluonDataReader, drop_tracking::DropNotifier};
 use stardust_xr_fusion::spatial::SpatialRef;
 use stardust_xr_gluon::AbortOnDrop;
 use stardust_xr_panel_item::protocol::{
@@ -175,12 +175,13 @@ impl XdgBackend {
     }
 }
 impl PanelItemHandler for XdgBackend {
-    async fn register_xkb_keymap(&self, xkb_keymap: String) -> KeymapId {
+    async fn register_xkb_keymap(&self, _ctx: GluonCtx, xkb_keymap: String) -> KeymapId {
         KEYMAPS.register(xkb_keymap).await
     }
 
     fn absolute_pointer_motion(
         &self,
+        _ctx: GluonCtx,
         surface: SurfaceId,
         position: stardust_xr_panel_item::protocol::Vec2,
     ) {
@@ -199,6 +200,7 @@ impl PanelItemHandler for XdgBackend {
 
     fn relative_pointer_motion(
         &self,
+        _ctx: GluonCtx,
         _surface: SurfaceId,
         delta: stardust_xr_panel_item::protocol::Vec2,
     ) {
@@ -211,7 +213,7 @@ impl PanelItemHandler for XdgBackend {
             }));
     }
 
-    fn pointer_button(&self, surface: SurfaceId, button: u32, pressed: bool) {
+    fn pointer_button(&self, _ctx: GluonCtx, surface: SurfaceId, button: u32, pressed: bool) {
         if let Some(surface) = self.surface_from_id(&surface) {
             let _ = self
                 .toplevel()
@@ -227,6 +229,7 @@ impl PanelItemHandler for XdgBackend {
 
     fn pointer_scroll_discrete(
         &self,
+        _ctx: GluonCtx,
         surface: SurfaceId,
         delta: stardust_xr_panel_item::protocol::Vec2,
         source: ScrollSource,
@@ -246,6 +249,7 @@ impl PanelItemHandler for XdgBackend {
 
     fn pointer_scroll_pixels(
         &self,
+        _ctx: GluonCtx,
         surface: SurfaceId,
         delta: stardust_xr_panel_item::protocol::Vec2,
         source: ScrollSource,
@@ -263,7 +267,7 @@ impl PanelItemHandler for XdgBackend {
         }
     }
 
-    fn pointer_scroll_stop(&self, surface: SurfaceId) {
+    fn pointer_scroll_stop(&self, _ctx: GluonCtx, surface: SurfaceId) {
         if let Some(surface) = self.surface_from_id(&surface) {
             let _ = self
                 .toplevel()
@@ -273,7 +277,7 @@ impl PanelItemHandler for XdgBackend {
         }
     }
 
-    fn key(&self, surface: SurfaceId, keymap: KeymapId, key: u32, pressed: bool) {
+    fn key(&self, _ctx: GluonCtx, surface: SurfaceId, keymap: KeymapId, key: u32, pressed: bool) {
         tracing::debug!(
             "Backend: Keyboard key {} {}",
             key,
@@ -295,6 +299,7 @@ impl PanelItemHandler for XdgBackend {
 
     fn touch_down(
         &self,
+        _ctx: GluonCtx,
         surface: SurfaceId,
         id: u32,
         position: stardust_xr_panel_item::protocol::Vec2,
@@ -318,7 +323,12 @@ impl PanelItemHandler for XdgBackend {
         }
     }
 
-    fn touch_move(&self, id: u32, position: stardust_xr_panel_item::protocol::Vec2) {
+    fn touch_move(
+        &self,
+        _ctx: GluonCtx,
+        id: u32,
+        position: stardust_xr_panel_item::protocol::Vec2,
+    ) {
         tracing::debug!(
             "Backend: Touch move {} to ({}, {})",
             id,
@@ -335,7 +345,7 @@ impl PanelItemHandler for XdgBackend {
             }));
     }
 
-    fn touch_up(&self, id: u32) {
+    fn touch_up(&self, _ctx: GluonCtx, id: u32) {
         tracing::debug!("Backend: Touch up {}", id);
         let toplevel = self.toplevel();
         let _ = toplevel
@@ -344,7 +354,7 @@ impl PanelItemHandler for XdgBackend {
             .send(Message::Seat(SeatMessage::TouchUp { id }));
     }
 
-    fn close_toplevel(&self) {
+    fn close_toplevel(&self, _ctx: GluonCtx) {
         let _ = self
             .toplevel()
             .wl_surface()
@@ -352,7 +362,7 @@ impl PanelItemHandler for XdgBackend {
             .send(Message::CloseToplevel(self.toplevel().clone()));
     }
 
-    fn resize_toplevel_to_app_request(&self) {
+    fn resize_toplevel_to_app_request(&self, _ctx: GluonCtx) {
         let _ = self
             .toplevel()
             .wl_surface()
@@ -363,7 +373,11 @@ impl PanelItemHandler for XdgBackend {
             });
     }
 
-    fn request_toplevel_resize(&self, new_size: stardust_xr_panel_item::protocol::UVec2) {
+    fn request_toplevel_resize(
+        &self,
+        _ctx: GluonCtx,
+        new_size: stardust_xr_panel_item::protocol::UVec2,
+    ) {
         let _ = self
             .toplevel()
             .wl_surface()
@@ -374,7 +388,7 @@ impl PanelItemHandler for XdgBackend {
             });
     }
 
-    fn toplevel_focused(&self, focused: bool) {
+    fn toplevel_focused(&self, _ctx: GluonCtx, focused: bool) {
         let _ = self
             .toplevel()
             .wl_surface()
@@ -439,17 +453,31 @@ impl XdgBackend {
 impl TransactionHandler for XdgBackend {
     async fn handle(&self, transaction: binderbinder::device::Transaction) -> PayloadBuilder<'_> {
         let mut data = GluonDataReader::from_payload(transaction.payload);
-        self.dispatch_two_way(transaction.code, &mut data)
-            .await
-            .inspect_err(|err| tracing::error!("failed to dispatch transaction: {err}"))
-            .map(|v| v.to_payload())
-            .unwrap_or_else(|_| PayloadBuilder::new())
+        self.dispatch_two_way(
+            transaction.code,
+            &mut data,
+            GluonCtx {
+                sender_pid: transaction.sender_pid,
+                sender_euid: transaction.sender_euid,
+            },
+        )
+        .await
+        .inspect_err(|err| tracing::error!("failed to dispatch transaction: {err}"))
+        .map(|v| v.to_payload())
+        .unwrap_or_else(|_| PayloadBuilder::new())
     }
 
     async fn handle_one_way(&self, transaction: binderbinder::device::Transaction) {
         let mut data = GluonDataReader::from_payload(transaction.payload);
         _ = self
-            .dispatch_one_way(transaction.code, &mut data)
+            .dispatch_one_way(
+                transaction.code,
+                &mut data,
+                GluonCtx {
+                    sender_pid: transaction.sender_pid,
+                    sender_euid: transaction.sender_euid,
+                },
+            )
             .await
             .inspect_err(|err| tracing::error!("failed to dispatch one way: {err}"));
     }

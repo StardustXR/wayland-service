@@ -264,6 +264,9 @@ impl Keyboard {
 
     pub async fn reset(&self, client: &mut Client) -> WaylandResult<()> {
         let mut modifier_state = self.modifier_state.lock();
+        if *self.current_keymap_id.lock() == 0 {
+            return Ok(());
+        }
         modifier_state.pressed_keys.clear();
         modifier_state.mods_depressed = 0;
         modifier_state.mods_latched = 0;
