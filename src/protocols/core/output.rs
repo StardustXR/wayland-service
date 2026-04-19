@@ -34,8 +34,17 @@ impl Output {
             )
             .await?;
         }
-        self.mode(client, self.id, Mode::Current, 2048, 2048, i32::MAX)
-            .await?;
+
+        self.mode(
+            client,
+            self.id,
+            Mode::Current | Mode::Preferred,
+            2048,
+            2048,
+            // wayland reports this in millihertz apparently
+            2048 * 1000,
+        )
+        .await?;
 
         if self.version >= 2 {
             self.done(client, self.id).await?;
