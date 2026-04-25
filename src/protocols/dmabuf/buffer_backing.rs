@@ -151,7 +151,7 @@ impl DmabufBacking {
 }
 impl Drop for DmabufBacking {
     fn drop(&mut self) {
-        drawable::unregister_dmatex(CLIENT.wait(), self.dmatex_id).unwrap();
+        _ = drawable::unregister_dmatex(CLIENT.wait(), self.dmatex_id);
     }
 }
 #[derive(Debug, thiserror::Error)]
