@@ -27,15 +27,15 @@ stardust-xr-panel-item = { git = "https://github.com/StardustXR/panel-item" }
 vulkano = { git = "https://github.com/Schmarni-Dev/vulkano", branch = "0_35_dmabuf_fixes", default-features = false }
 
 [dependencies]
-waynest = { git = "https://github.com/verdiwm/waynest.git", default-features = false }
+waynest = { git = "https://github.com/verdiwm/waynest.git", default-features = false, rev = "ddab3f" }
 waynest-protocols = { git = "https://github.com/verdiwm/waynest.git", features = [
 	"server",
 	"stable",
 	"unstable",
 	"mesa",
 	"tracing",
-], default-features = false }
-waynest-server = { git = "https://github.com/verdiwm/waynest.git", default-features = false }
+], default-features = false, rev = "ddab3f" }
+waynest-server = { git = "https://github.com/verdiwm/waynest.git", default-features = false, rev = "ddab3f" }
 tokio-stream = "0.1.17"
 memmap2 = "0.9.5"
 drm-fourcc = "2.2.0"

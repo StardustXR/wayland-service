@@ -1,11 +1,7 @@
 use std::{fs::OpenOptions, path::Path, sync::Arc};
 
-use binderbinder::{
-    TransactionHandler,
-    binder_object::{BinderObject, BinderObjectOrRef, ToBinderObjectOrRef},
-    payload::PayloadBuilder,
-};
-use gluon_wire::{GluonCtx, GluonDataReader, drop_tracking::DropNotifier};
+use binderbinder::binder_object::{BinderObject, BinderObjectOrRef, ToBinderObjectOrRef};
+use gluon_wire::{GluonCtx, impl_transaction_handler};
 use pion_binder::PionBinderDevice;
 use stardust_xr_fusion::fields::FieldRef;
 use stardust_xr_panel_item::protocol::{PanelItemAcceptor, PanelItemProviderHandler, SpatialRefId};
@@ -16,14 +12,10 @@ use crate::CLIENT;
 pub static ACCEPTORS: RwLock<Vec<(FieldRef, PanelItemAcceptor)>> = RwLock::const_new(Vec::new());
 
 #[derive(Debug)]
-pub struct PanelItemProvider {
-    drop_notifs: RwLock<Vec<DropNotifier>>,
-}
+pub struct PanelItemProvider {}
 impl PanelItemProvider {
-    pub async fn setup(dev: &PionBinderDevice, path: &Path) -> Arc<BinderObject<Self>> {
-        let obj = dev.register_object(PanelItemProvider {
-            drop_notifs: RwLock::default(),
-        });
+    pub async fn setup(dev: &PionBinderDevice, path: &Path) -> BinderObject<Self> {
+        let obj = dev.register_object(PanelItemProvider {});
         let file = OpenOptions::new()
             .write(true)
             .read(true)
@@ -35,19 +27,20 @@ impl PanelItemProvider {
     }
 }
 impl PanelItemProviderHandler for PanelItemProvider {
-    fn register_acceptor(&self, _ctx: GluonCtx, acceptor: PanelItemAcceptor) {
+    async fn register_acceptor(&self, _ctx: GluonCtx, acceptor: PanelItemAcceptor) {
         tokio::spawn(async move {
             let field = acceptor.get_field().await.unwrap();
             let field_ref = FieldRef::import(CLIENT.wait(), field.id).await.unwrap();
             ACCEPTORS.write().await.push((field_ref, acceptor.clone()));
-            tokio::spawn(async move {
-                acceptor.death_or_drop().await;
-                remove_acceptor(acceptor).await;
-            })
+            // TODO: move to proper query system to avoid this mem leak
+            // tokio::spawn(async move {
+            //     acceptor.death_or_drop().await;
+            //     remove_acceptor(acceptor).await;
+            // })
         });
     }
 
-    fn drop_acceptor(&self, _ctx: GluonCtx, acceptor: PanelItemAcceptor) {
+    async fn drop_acceptor(&self, _ctx: GluonCtx, acceptor: PanelItemAcceptor) {
         tokio::spawn(async move {
             remove_acceptor(acceptor).await;
         });
@@ -59,11 +52,6 @@ impl PanelItemProviderHandler for PanelItemProvider {
         token: String,
         spatial_ref: SpatialRefId,
     ) {
-        
-    }
-
-    async fn drop_notification_requested(&self, notifier: gluon_wire::drop_tracking::DropNotifier) {
-        self.drop_notifs.write().await.push(notifier);
     }
 }
 
@@ -82,35 +70,4 @@ async fn remove_acceptor(acceptor: PanelItemAcceptor) {
     });
 }
 
-impl TransactionHandler for PanelItemProvider {
-    async fn handle(&self, transaction: binderbinder::device::Transaction) -> PayloadBuilder<'_> {
-        let mut data = GluonDataReader::from_payload(transaction.payload);
-        self.dispatch_two_way(
-            transaction.code,
-            &mut data,
-            GluonCtx {
-                sender_pid: transaction.sender_pid,
-                sender_euid: transaction.sender_euid,
-            },
-        )
-        .await
-        .inspect_err(|err| tracing::error!("failed to dispatch transaction: {err}"))
-        .map(|v| v.to_payload())
-        .unwrap_or_else(|_| PayloadBuilder::new())
-    }
-
-    async fn handle_one_way(&self, transaction: binderbinder::device::Transaction) {
-        let mut data = GluonDataReader::from_payload(transaction.payload);
-        _ = self
-            .dispatch_one_way(
-                transaction.code,
-                &mut data,
-                GluonCtx {
-                    sender_pid: transaction.sender_pid,
-                    sender_euid: transaction.sender_euid,
-                },
-            )
-            .await
-            .inspect_err(|err| tracing::error!("failed to dispatch one way: {err}"));
-    }
-}
+impl_transaction_handler!(PanelItemProvider);

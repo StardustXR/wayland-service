@@ -3,8 +3,8 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-use binderbinder::{TransactionHandler, binder_object::BinderObject, payload::PayloadBuilder};
-use gluon_wire::{GluonCtx, GluonDataReader, drop_tracking::DropNotifier};
+use binderbinder::binder_object::{BinderObject, BinderObjectRef};
+use gluon_wire::{GluonCtx, impl_transaction_handler};
 use mint::{Vector2, Vector3};
 use stardust_xr_fusion::{
     drawable::{
@@ -46,7 +46,6 @@ pub struct PanelItemUi {
     part: ModelPart,
     input_task: OnceLock<AbortOnDrop>,
     grabbable: RwLock<Grabbable>,
-    drop_notifs: RwLock<Vec<DropNotifier>>,
     replaced: AtomicBool,
 }
 
@@ -57,7 +56,6 @@ impl std::fmt::Debug for PanelItemUi {
             .field("field", &self.field)
             .field("part", &self.part)
             .field("grabbable", &"Grabbable")
-            .field("drop_notifs", &self.drop_notifs)
             .finish()
     }
 }
@@ -122,7 +120,6 @@ impl PanelItemUi {
             field,
             part,
             grabbable: RwLock::new(grabbable),
-            drop_notifs: RwLock::default(),
             input_task: OnceLock::new(),
             replaced: AtomicBool::new(false),
         });
@@ -153,12 +150,12 @@ impl PanelItemUi {
             }
         });
         _ = obj.input_task.set(input_task.into());
-        let drop_future = panel_item.death_or_drop();
+        let drop_future = obj.strong_refs_hit_zero();
         tokio::spawn(async move {
             drop_future.await;
             tracing::debug!("dropping panel item ui: {:?}", obj.root.id());
         });
-        backend
+        Arc::new(backend)
     }
     async fn update_input(&self, frame_info: FrameInfo) {
         let mut grabbable = self.grabbable.write().await;
@@ -218,7 +215,7 @@ impl PanelItemUi {
 }
 
 impl PanelShellHandler for PanelItemUi {
-    fn update_surface_dmatex(
+    async fn update_surface_dmatex(
         &self,
         _ctx: GluonCtx,
         surface: SurfaceUpdateTarget,
@@ -254,63 +251,32 @@ impl PanelShellHandler for PanelItemUi {
         )
     }
 
-    fn toplevel_resized(&self, _ctx: GluonCtx, new_size: stardust_xr_panel_item::protocol::UVec2) {
+    async fn toplevel_resized(
+        &self,
+        _ctx: GluonCtx,
+        new_size: stardust_xr_panel_item::protocol::UVec2,
+    ) {
         let size = Self::get_size([new_size.x as usize, new_size.y as usize]);
         _ = self.model.set_local_transform(Transform::from_scale(size));
         _ = self.field.set_shape(Shape::Box(size));
     }
 
-    fn toplevel_fullscreen(&self, _ctx: GluonCtx, _fullscreen_active: bool) {}
+    async fn toplevel_fullscreen(&self, _ctx: GluonCtx, _fullscreen_active: bool) {}
 
     // TODO: maybe impl?
-    fn toplevel_title(&self, _ctx: GluonCtx, _title: String) {}
+    async fn toplevel_title(&self, _ctx: GluonCtx, _title: String) {}
 
     // TODO: maybe impl?
-    fn toplevel_app_id(&self, _ctx: GluonCtx, _app_id: String) {}
+    async fn toplevel_app_id(&self, _ctx: GluonCtx, _app_id: String) {}
 
-    fn set_cursor_visuals(&self, _ctx: GluonCtx, _geometry: Option<Geometry>) {}
+    async fn set_cursor_visuals(&self, _ctx: GluonCtx, _geometry: Option<Geometry>) {}
 
     // TODO: impl for subsurfaces
-    fn create_child(&self, _ctx: GluonCtx, _child: ChildState) {}
+    async fn create_child(&self, _ctx: GluonCtx, _child: ChildState) {}
 
-    fn move_child(&self, _ctx: GluonCtx, _child_id: u64, _geometry: Geometry) {}
+    async fn move_child(&self, _ctx: GluonCtx, _child_id: u64, _geometry: Geometry) {}
 
-    fn destroy_child(&self, _ctx: GluonCtx, _child_id: u64) {}
-
-    async fn drop_notification_requested(&self, notifier: DropNotifier) {
-        self.drop_notifs.write().await.push(notifier);
-    }
+    async fn destroy_child(&self, _ctx: GluonCtx, _child_id: u64) {}
 }
 
-impl TransactionHandler for PanelItemUi {
-    async fn handle(&self, transaction: binderbinder::device::Transaction) -> PayloadBuilder<'_> {
-        let mut data = GluonDataReader::from_payload(transaction.payload);
-        self.dispatch_two_way(
-            transaction.code,
-            &mut data,
-            GluonCtx {
-                sender_pid: transaction.sender_pid,
-                sender_euid: transaction.sender_euid,
-            },
-        )
-        .await
-        .inspect_err(|err| tracing::error!("failed to dispatch transaction: {err}"))
-        .map(|v| v.to_payload())
-        .unwrap_or_else(|_| PayloadBuilder::new())
-    }
-
-    async fn handle_one_way(&self, transaction: binderbinder::device::Transaction) {
-        let mut data = GluonDataReader::from_payload(transaction.payload);
-        _ = self
-            .dispatch_one_way(
-                transaction.code,
-                &mut data,
-                GluonCtx {
-                    sender_pid: transaction.sender_pid,
-                    sender_euid: transaction.sender_euid,
-                },
-            )
-            .await
-            .inspect_err(|err| tracing::error!("failed to dispatch one way: {err}"));
-    }
-}
+impl_transaction_handler!(PanelItemUi);

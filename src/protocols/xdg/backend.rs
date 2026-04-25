@@ -9,9 +9,13 @@ use crate::{
         surface::Surface,
     },
 };
-use binderbinder::{TransactionHandler, binder_object::BinderObject, payload::PayloadBuilder};
+use binderbinder::{
+    TransactionHandler,
+    binder_object::{BinderObject, BinderObjectRef},
+    payload::PayloadBuilder,
+};
 use dashmap::DashMap;
-use gluon_wire::{GluonCtx, GluonDataReader, drop_tracking::DropNotifier};
+use gluon_wire::{GluonCtx, GluonDataReader, impl_transaction_handler};
 use stardust_xr_fusion::spatial::SpatialRef;
 use stardust_xr_gluon::AbortOnDrop;
 use stardust_xr_panel_item::protocol::{
@@ -20,7 +24,6 @@ use stardust_xr_panel_item::protocol::{
 };
 use std::sync::Weak;
 use std::sync::{Arc, OnceLock};
-use tokio::sync::RwLock;
 use tracing;
 
 pub struct XdgBackend {
@@ -29,7 +32,6 @@ pub struct XdgBackend {
     panel_shell: OnceLock<PanelShell>,
     output_spatial: OnceLock<SpatialRef>,
     pub children: DashMap<u64, (Weak<Surface>, ChildState)>,
-    drop_notifs: RwLock<Vec<DropNotifier>>,
     task: OnceLock<AbortOnDrop>,
 }
 
@@ -41,7 +43,6 @@ impl std::fmt::Debug for XdgBackend {
             .field("panel_shell", &self.panel_shell)
             .field("output_spatial", &self.output_spatial)
             .field("children", &self.children)
-            .field("drop_notifs", &self.drop_notifs)
             .finish()
     }
 }
@@ -59,7 +60,6 @@ impl XdgBackend {
             children: DashMap::new(),
             panel_shell: OnceLock::from(panel_shell),
             output_spatial: OnceLock::from(output_spatial_ref),
-            drop_notifs: RwLock::default(),
             task: OnceLock::new(),
         };
         backend.reset_input();
@@ -77,18 +77,17 @@ impl XdgBackend {
             children: DashMap::new(),
             panel_shell: OnceLock::new(),
             output_spatial: OnceLock::new(),
-            drop_notifs: RwLock::default(),
             task: OnceLock::new(),
         };
-        let obj = dev.register_object(item_backend);
+        let obj = Arc::new(dev.register_object(item_backend));
         let (shell, spatial_ref_id) = item_acceptor
-            .accept(PanelItem::from_handler(&obj))
+            .accept(PanelItem::from_handler(&*obj))
             .await
             .unwrap();
         let spatial_ref = SpatialRef::import(CLIENT.wait(), spatial_ref_id.id)
             .await
             .unwrap();
-        let drop_future = shell.death_or_drop();
+        let drop_future = obj.strong_refs_hit_zero();
         obj.panel_shell.set(shell).unwrap();
         obj.output_spatial.set(spatial_ref).unwrap();
         tokio::spawn({
@@ -179,7 +178,7 @@ impl PanelItemHandler for XdgBackend {
         KEYMAPS.register(xkb_keymap).await
     }
 
-    fn absolute_pointer_motion(
+    async fn absolute_pointer_motion(
         &self,
         _ctx: GluonCtx,
         surface: SurfaceId,
@@ -198,7 +197,7 @@ impl PanelItemHandler for XdgBackend {
             }));
     }
 
-    fn relative_pointer_motion(
+    async fn relative_pointer_motion(
         &self,
         _ctx: GluonCtx,
         _surface: SurfaceId,
@@ -213,7 +212,7 @@ impl PanelItemHandler for XdgBackend {
             }));
     }
 
-    fn pointer_button(&self, _ctx: GluonCtx, surface: SurfaceId, button: u32, pressed: bool) {
+    async fn pointer_button(&self, _ctx: GluonCtx, surface: SurfaceId, button: u32, pressed: bool) {
         if let Some(surface) = self.surface_from_id(&surface) {
             let _ = self
                 .toplevel()
@@ -227,7 +226,7 @@ impl PanelItemHandler for XdgBackend {
         }
     }
 
-    fn pointer_scroll_discrete(
+    async fn pointer_scroll_discrete(
         &self,
         _ctx: GluonCtx,
         surface: SurfaceId,
@@ -247,7 +246,7 @@ impl PanelItemHandler for XdgBackend {
         }
     }
 
-    fn pointer_scroll_pixels(
+    async fn pointer_scroll_pixels(
         &self,
         _ctx: GluonCtx,
         surface: SurfaceId,
@@ -267,7 +266,7 @@ impl PanelItemHandler for XdgBackend {
         }
     }
 
-    fn pointer_scroll_stop(&self, _ctx: GluonCtx, surface: SurfaceId) {
+    async fn pointer_scroll_stop(&self, _ctx: GluonCtx, surface: SurfaceId) {
         if let Some(surface) = self.surface_from_id(&surface) {
             let _ = self
                 .toplevel()
@@ -277,7 +276,14 @@ impl PanelItemHandler for XdgBackend {
         }
     }
 
-    fn key(&self, _ctx: GluonCtx, surface: SurfaceId, keymap: KeymapId, key: u32, pressed: bool) {
+    async fn key(
+        &self,
+        _ctx: GluonCtx,
+        surface: SurfaceId,
+        keymap: KeymapId,
+        key: u32,
+        pressed: bool,
+    ) {
         tracing::debug!(
             "Backend: Keyboard key {} {}",
             key,
@@ -297,7 +303,7 @@ impl PanelItemHandler for XdgBackend {
         }
     }
 
-    fn touch_down(
+    async fn touch_down(
         &self,
         _ctx: GluonCtx,
         surface: SurfaceId,
@@ -323,7 +329,7 @@ impl PanelItemHandler for XdgBackend {
         }
     }
 
-    fn touch_move(
+    async fn touch_move(
         &self,
         _ctx: GluonCtx,
         id: u32,
@@ -345,7 +351,7 @@ impl PanelItemHandler for XdgBackend {
             }));
     }
 
-    fn touch_up(&self, _ctx: GluonCtx, id: u32) {
+    async fn touch_up(&self, _ctx: GluonCtx, id: u32) {
         tracing::debug!("Backend: Touch up {}", id);
         let toplevel = self.toplevel();
         let _ = toplevel
@@ -354,7 +360,7 @@ impl PanelItemHandler for XdgBackend {
             .send(Message::Seat(SeatMessage::TouchUp { id }));
     }
 
-    fn close_toplevel(&self, _ctx: GluonCtx) {
+    async fn close_toplevel(&self, _ctx: GluonCtx) {
         let _ = self
             .toplevel()
             .wl_surface()
@@ -362,7 +368,7 @@ impl PanelItemHandler for XdgBackend {
             .send(Message::CloseToplevel(self.toplevel().clone()));
     }
 
-    fn resize_toplevel_to_app_request(&self, _ctx: GluonCtx) {
+    async fn resize_toplevel_to_app_request(&self, _ctx: GluonCtx) {
         let _ = self
             .toplevel()
             .wl_surface()
@@ -373,7 +379,7 @@ impl PanelItemHandler for XdgBackend {
             });
     }
 
-    fn request_toplevel_resize(
+    async fn request_toplevel_resize(
         &self,
         _ctx: GluonCtx,
         new_size: stardust_xr_panel_item::protocol::UVec2,
@@ -388,7 +394,7 @@ impl PanelItemHandler for XdgBackend {
             });
     }
 
-    fn toplevel_focused(&self, _ctx: GluonCtx, focused: bool) {
+    async fn toplevel_focused(&self, _ctx: GluonCtx, focused: bool) {
         let _ = self
             .toplevel()
             .wl_surface()
@@ -397,10 +403,6 @@ impl PanelItemHandler for XdgBackend {
                 toplevel: self.toplevel().clone(),
                 active: focused,
             });
-    }
-
-    async fn drop_notification_requested(&self, notifier: DropNotifier) {
-        self.drop_notifs.write().await.push(notifier);
     }
 }
 impl XdgBackend {
@@ -450,35 +452,4 @@ impl XdgBackend {
             .send(Message::Seat(SeatMessage::Reset));
     }
 }
-impl TransactionHandler for XdgBackend {
-    async fn handle(&self, transaction: binderbinder::device::Transaction) -> PayloadBuilder<'_> {
-        let mut data = GluonDataReader::from_payload(transaction.payload);
-        self.dispatch_two_way(
-            transaction.code,
-            &mut data,
-            GluonCtx {
-                sender_pid: transaction.sender_pid,
-                sender_euid: transaction.sender_euid,
-            },
-        )
-        .await
-        .inspect_err(|err| tracing::error!("failed to dispatch transaction: {err}"))
-        .map(|v| v.to_payload())
-        .unwrap_or_else(|_| PayloadBuilder::new())
-    }
-
-    async fn handle_one_way(&self, transaction: binderbinder::device::Transaction) {
-        let mut data = GluonDataReader::from_payload(transaction.payload);
-        _ = self
-            .dispatch_one_way(
-                transaction.code,
-                &mut data,
-                GluonCtx {
-                    sender_pid: transaction.sender_pid,
-                    sender_euid: transaction.sender_euid,
-                },
-            )
-            .await
-            .inspect_err(|err| tracing::error!("failed to dispatch one way: {err}"));
-    }
-}
+impl_transaction_handler!(XdgBackend);
