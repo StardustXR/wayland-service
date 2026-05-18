@@ -20,7 +20,7 @@ use stardust_xr_fusion::spatial::SpatialRef;
 use stardust_xr_gluon::AbortOnDrop;
 use stardust_xr_panel_item::protocol::{
     ChildState, Geometry, KeymapId, PanelItem, PanelItemAcceptor, PanelItemHandler, PanelShell,
-    ScrollSource, SurfaceId,
+    ScrollSource, SurfaceId, SurfaceUpdateTarget,
 };
 use std::sync::Weak;
 use std::sync::{Arc, OnceLock};
@@ -127,7 +127,7 @@ impl XdgBackend {
     }
 
     pub fn add_child(&self, surface: &Arc<Surface>, info: ChildState) {
-        let Some(SurfaceId::Child { id }) = surface.surface_id.get().cloned() else {
+        let Some(SurfaceUpdateTarget::Child { id }) = surface.surface_id.get().cloned() else {
             return;
         };
         if info.id != id {
@@ -140,7 +140,7 @@ impl XdgBackend {
     }
 
     pub fn reposition_child(&self, surface: &Arc<Surface>, geometry: Geometry) {
-        let Some(SurfaceId::Child { id }) = surface.surface_id.get() else {
+        let Some(SurfaceUpdateTarget::Child { id }) = surface.surface_id.get() else {
             return;
         };
 
@@ -151,7 +151,7 @@ impl XdgBackend {
     }
 
     pub fn update_child_z_order(&self, surface: &Arc<Surface>, z_order: i32) {
-        let Some(SurfaceId::Child { id }) = surface.surface_id.get() else {
+        let Some(SurfaceUpdateTarget::Child { id }) = surface.surface_id.get() else {
             return;
         };
 
@@ -165,7 +165,7 @@ impl XdgBackend {
     }
 
     pub fn remove_child(&self, surface: &Surface) {
-        let Some(SurfaceId::Child { id }) = surface.surface_id.get() else {
+        let Some(SurfaceUpdateTarget::Child { id }) = surface.surface_id.get() else {
             return;
         };
         self.children.remove(id);

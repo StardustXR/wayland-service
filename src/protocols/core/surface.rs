@@ -14,8 +14,8 @@ use crate::{
 };
 use binderbinder::binder_object::BinderObject;
 use mint::Vector2;
-use parking_lot::Mutex;
-use stardust_xr_panel_item::protocol::{Geometry, SurfaceId, SurfaceUpdateTarget};
+use parking_lot::{Mutex, RwLock};
+use stardust_xr_panel_item::protocol::{Geometry, SurfaceUpdateTarget};
 use std::{
     fmt::Display,
     sync::{Arc, OnceLock, Weak},
@@ -107,7 +107,7 @@ pub type CommitFilter = Box<dyn Fn() -> bool + Send + Sync>;
 #[waynest(error = crate::error::WaylandError, connection = crate::client::Client)]
 pub struct Surface {
     pub id: ObjectId,
-    pub surface_id: OnceLock<SurfaceId>,
+    pub surface_id: OnceLock<SurfaceUpdateTarget>,
     state: Arc<Mutex<SurfaceCommitAwareBuffer<SurfaceState>>>,
     pub message_sink: MessageSink,
     pub role: OnceLock<SurfaceRole>,
@@ -120,7 +120,8 @@ pub struct Surface {
     state_buffer_manager: Arc<SurfaceCommitAwareBufferManager>,
     children: Registry<Surface>,
     parent: OnceLock<Weak<Surface>>,
-    pub toplevel: OnceLock<Weak<Toplevel>>,
+    // TODO: make this async
+    pub toplevel: RwLock<Weak<Toplevel>>,
 }
 impl std::fmt::Debug for Surface {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -160,7 +161,7 @@ impl Surface {
                 state_buffer_manager: manager,
                 children: Registry::new(),
                 parent: OnceLock::new(),
-                toplevel: OnceLock::new(),
+                toplevel: RwLock::new(Weak::new()),
             }
         });
         surface.add_updated_current_state_handler(|surface| {
@@ -226,7 +227,7 @@ impl Surface {
         self.state.lock().current().has_valid_buffer()
     }
     pub fn panel_item(&self) -> Option<Arc<BinderObject<XdgBackend>>> {
-        self.toplevel.get()?.upgrade()?.panel_item()
+        self.toplevel.read().upgrade()?.panel_item()
     }
 
     /// Set a filter that controls whether current state in SurfaceCommitAwareBuffers is updated on
@@ -373,9 +374,9 @@ impl Surface {
 
     pub fn set_parent(self: &Arc<Self>, parent: &Arc<Surface>) {
         // Copy parent's panel_item to subsurface (like popups do)
-        if let Some(toplevel) = parent.toplevel.get() {
-            _ = self.toplevel.set(toplevel.clone());
-        }
+        let toplevel = parent.toplevel.read();
+        *self.toplevel.write() = toplevel.clone();
+
         if self.parent.set(Arc::downgrade(parent)).is_ok() {
             parent.children.add_raw(self);
         }
@@ -409,22 +410,16 @@ impl Surface {
     }
 }
 impl Surface {
-    fn buffer_update(&self) {
+    pub(super) fn buffer_update(&self) {
         if let Some(buffer) = self.state.lock().current().buffer.as_ref()
             && let Some(panel_item) = self.panel_item()
             && let Some(surface_id) = self.surface_id.get()
         {
             let (dmatex_uid, acquire, release) = buffer.update();
-            let surface_target = if matches!(self.role.get(), Some(SurfaceRole::Cursor)) {
-                SurfaceUpdateTarget::Cursor
-            } else {
-                surface_id.clone().into()
-            };
-            // tracing::info!("calling update_surface_dmatex");
             panel_item
                 .panel_shell()
                 .update_surface_dmatex(
-                    surface_target,
+                    *surface_id,
                     dmatex_uid,
                     acquire,
                     release,

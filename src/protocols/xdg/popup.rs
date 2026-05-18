@@ -5,7 +5,7 @@ use super::{
 use crate::error::WaylandResult;
 use parking_lot::Mutex;
 use rand::random;
-use stardust_xr_panel_item::protocol::SurfaceId;
+use stardust_xr_panel_item::protocol::SurfaceUpdateTarget;
 use std::sync::Arc;
 use waynest::ObjectId;
 use waynest_protocols::server::stable::xdg_shell::xdg_popup::XdgPopup;
@@ -21,9 +21,10 @@ pub struct Popup {
 }
 impl Popup {
     pub fn new(version: u32, surface: Arc<Surface>, positioner: &Positioner, id: ObjectId) -> Self {
-        let _ = surface.wl_surface.surface_id.set(SurfaceId::Child {
-            id: random(),
-        });
+        let _ = surface
+            .wl_surface
+            .surface_id
+            .set(SurfaceUpdateTarget::Child { id: random() });
 
         let positioner_data = positioner.data();
         Self {

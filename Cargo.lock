@@ -260,7 +260,7 @@ dependencies = [
 [[package]]
 name = "binderbinder"
 version = "0.1.0"
-source = "git+https://github.com/Technobaboo/binderbinder#743782a85500eb375d5e25e20f88823a8f4bdde7"
+source = "git+https://github.com/Technobaboo/binderbinder#c5eab359d922500717674db5d8727eb394511bd8"
 dependencies = [
  "bitflags 2.11.1",
  "byteorder",

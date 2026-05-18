@@ -5,7 +5,9 @@ use crate::util::{BufferedState, SurfaceCommitAwareBuffer};
 use mint::Vector2;
 use parking_lot::Mutex;
 use rand::random;
-use stardust_xr_panel_item::protocol::{ChildState, Geometry, Rect, SurfaceId};
+use stardust_xr_panel_item::protocol::{
+    ChildState, Geometry, Rect, SurfaceId, SurfaceUpdateTarget,
+};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use waynest::ObjectId;
@@ -100,7 +102,9 @@ pub struct Subsurface {
 impl Subsurface {
     pub fn new(id: ObjectId, surface: Arc<Surface>, parent: Arc<Surface>) -> Self {
         let child_id = random();
-        let _ = surface.surface_id.set(SurfaceId::Child { id: child_id });
+        let _ = surface
+            .surface_id
+            .set(SurfaceUpdateTarget::Child { id: child_id });
         surface.set_parent(&parent);
 
         Self {
@@ -151,15 +155,13 @@ impl Subsurface {
                 let Some(parent) = subsurface.surface.parent() else {
                     return true;
                 };
-                let Some(toplevel) = parent.toplevel.get().cloned() else {
-                    return true;
-                };
                 let Some(panel_item) = parent.panel_item() else {
                     return true;
                 };
 
                 if surface.currently_has_valid_buffer() {
-                    surface.toplevel.set(toplevel);
+                    let toplevel = parent.toplevel.read().clone();
+                    *surface.toplevel.write() = toplevel;
                     let info = subsurface.create_child_info(surface.current_buffer_size());
                     panel_item.add_child(&subsurface.surface, info);
                     return false; // Remove handler after adding child once
@@ -223,7 +225,15 @@ impl Subsurface {
             .surface
             .parent()
             .and_then(|p| p.surface_id.get().cloned())
-            .unwrap_or(SurfaceId::Toplevel);
+            .unwrap_or(SurfaceUpdateTarget::Toplevel);
+        let parent_surface_id = match parent_surface_id {
+            SurfaceUpdateTarget::Toplevel => SurfaceId::Toplevel,
+            SurfaceUpdateTarget::Child { id } => SurfaceId::Child { id },
+            SurfaceUpdateTarget::Cursor => {
+                tracing::error!("creating subsurface for cursor, defaulting to toplevel instead");
+                SurfaceId::Toplevel
+            }
+        };
 
         ChildState {
             id: self.child_id.lock().unwrap(),
@@ -291,7 +301,8 @@ impl WlSubsurface for Subsurface {
     ) -> WaylandResult<()> {
         // Get the sibling's z_order
         let sibling_z_order = if let Some(sibling_surface) = client.get::<Surface>(sibling)
-            && let Some(SurfaceId::Child { id: sibling_id }) = sibling_surface.surface_id.get()
+            && let Some(SurfaceUpdateTarget::Child { id: sibling_id }) =
+                sibling_surface.surface_id.get()
             && let Some(parent) = self.surface.parent()
             && let Some(panel_item) = parent.panel_item()
             && let Some(child_entry) = panel_item.children.get(sibling_id)
@@ -315,7 +326,8 @@ impl WlSubsurface for Subsurface {
     ) -> WaylandResult<()> {
         // Get the sibling's z_order
         let sibling_z_order = if let Some(sibling_surface) = client.get::<Surface>(sibling)
-            && let Some(SurfaceId::Child { id: sibling_id }) = sibling_surface.surface_id.get()
+            && let Some(SurfaceUpdateTarget::Child { id: sibling_id }) =
+                sibling_surface.surface_id.get()
             && let Some(parent) = self.surface.parent()
             && let Some(panel_item) = parent.panel_item()
             && let Some(child_entry) = panel_item.children.get(sibling_id)

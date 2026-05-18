@@ -10,7 +10,7 @@ use binderbinder::binder_object::BinderObject;
 use mint::Vector2;
 use parking_lot::Mutex;
 use stardust_xr_fusion::spatial::SpatialRef;
-use stardust_xr_panel_item::protocol::SurfaceId;
+use stardust_xr_panel_item::protocol::SurfaceUpdateTarget;
 use std::sync::Arc;
 use waynest::ObjectId;
 pub use waynest_protocols::server::stable::xdg_shell::xdg_toplevel::*;
@@ -66,7 +66,7 @@ impl Toplevel {
         wl_surface: Arc<Surface>,
         xdg_surface: Arc<super::surface::Surface>,
     ) -> Self {
-        let _ = wl_surface.surface_id.set(SurfaceId::Toplevel);
+        let _ = wl_surface.surface_id.set(SurfaceUpdateTarget::Toplevel);
 
         Toplevel {
             id: object_id,

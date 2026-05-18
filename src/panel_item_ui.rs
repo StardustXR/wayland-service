@@ -225,12 +225,12 @@ impl PanelShellHandler for PanelItemUi {
         opaque: bool,
     ) {
         // TODO: remove this when children are implemented
-        if !matches!(surface, SurfaceUpdateTarget::Toplevel) {
-            tracing::warn!(
-                "surface update early exit, this will cause these surfaces to freeze since the buffers are never release"
-            );
-            return;
-        }
+        // if !matches!(surface, SurfaceUpdateTarget::Toplevel) {
+        //     tracing::warn!(
+        //         "surface update early exit, this will cause these surfaces to freeze since the buffers are never release"
+        //     );
+        //     return;
+        // }
         _ = self
             .part
             .set_material_parameter("opaque", MaterialParameter::Bool(opaque));

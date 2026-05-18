@@ -9,7 +9,7 @@ use crate::{
 use super::{popup::Popup, positioner::Positioner, toplevel::MappedInner};
 use mint::Vector2;
 use stardust_xr_fusion::spatial::{Spatial, Transform};
-use stardust_xr_panel_item::protocol::{ChildState, Rect, SurfaceId};
+use stardust_xr_panel_item::protocol::{ChildState, Rect, SurfaceId, SurfaceUpdateTarget};
 use std::sync::Arc;
 use waynest::ObjectId;
 use waynest_protocols::server::stable::xdg_shell::xdg_popup::XdgPopup;
@@ -84,7 +84,7 @@ impl XdgSurface for Surface {
         let configured = self.configured.clone();
         let mut first_commit = true;
         let message_tx = client.message_sink().clone();
-        self.wl_surface.toplevel.set(toplevel_weak.clone());
+        *self.wl_surface.toplevel.write() = toplevel_weak.clone();
         self.wl_surface.add_commit_handler(move |surface| {
             let Some(toplevel) = toplevel_weak.upgrade() else {
                 return true;
@@ -142,9 +142,9 @@ impl XdgSurface for Surface {
                 message: "Parent surface does not exist",
             });
         };
-        if let Some(toplevel) = parent.wl_surface.toplevel.get() {
-            _ = self.wl_surface.toplevel.set(toplevel.clone());
-        }
+        let toplevel = parent.wl_surface.toplevel.read().clone();
+        *self.wl_surface.toplevel.write() = toplevel;
+
         let positioner = client.get::<Positioner>(positioner).unwrap();
 
         let surface = client.get::<Surface>(self.id).unwrap();
@@ -169,11 +169,19 @@ impl XdgSurface for Surface {
         let serial = client.next_event_serial();
         self.configure(client, sender_id, serial).await?;
 
-        let Some(SurfaceId::Child { id }) = self.wl_surface.surface_id.get() else {
+        let Some(SurfaceUpdateTarget::Child { id }) = self.wl_surface.surface_id.get() else {
             return Ok(());
         };
         let Some(parent_id) = parent.wl_surface.surface_id.get() else {
             return Ok(());
+        };
+        let parent_id = match *parent_id {
+            SurfaceUpdateTarget::Toplevel => SurfaceId::Toplevel,
+            SurfaceUpdateTarget::Child { id } => SurfaceId::Child { id },
+            SurfaceUpdateTarget::Cursor => {
+                tracing::error!("creating popup for cursor, defaulting to toplevel instead");
+                SurfaceId::Toplevel
+            }
         };
 
         let child_info = ChildState {

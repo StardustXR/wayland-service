@@ -6,7 +6,6 @@ use stardust_xr_panel_item::protocol::{Geometry, ScrollSource};
 use std::sync::Arc;
 use std::sync::Weak;
 use tokio::sync::{Mutex, RwLock};
-use tracing::{self};
 use waynest::ObjectId;
 use waynest_server::Client as _;
 
@@ -357,6 +356,14 @@ impl WlPointer for Pointer {
         surface
             .try_set_role(SurfaceRole::Cursor, Error::Role)
             .await?;
+        _ = surface
+            .surface_id
+            .set(stardust_xr_panel_item::protocol::SurfaceUpdateTarget::Cursor);
+        if let Some(focused_surface) = self.focused_surface.lock().await.upgrade() {
+            *surface.toplevel.write() = focused_surface.toplevel.read().clone();
+        }
+        // a kinda ugly hack to get the cursor to show on startup
+        surface.buffer_update();
         self.cursor_surface.lock().await.replace(surface);
         Ok(())
     }
