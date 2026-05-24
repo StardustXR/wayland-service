@@ -10,7 +10,7 @@ use binderbinder::binder_object::BinderObject;
 use mint::Vector2;
 use parking_lot::Mutex;
 use stardust_xr_fusion::spatial::SpatialRef;
-use stardust_xr_panel_item::protocol::SurfaceUpdateTarget;
+use stardust_xr_panel_item::protocol::{SurfaceUpdateTarget, UVec2};
 use std::sync::Arc;
 use waynest::ObjectId;
 pub use waynest_protocols::server::stable::xdg_shell::xdg_toplevel::*;
@@ -58,6 +58,7 @@ pub struct Toplevel {
     pub id: ObjectId,
     xdg_surface: Arc<super::surface::Surface>,
     pub mapped: Mutex<Option<MappedInner>>,
+    pub(super) last_committed_res: Mutex<Option<Vector2<usize>>>,
     data: Mutex<ToplevelData>,
 }
 impl Toplevel {
@@ -73,6 +74,7 @@ impl Toplevel {
             xdg_surface,
             mapped: Mutex::new(None),
             data: Mutex::new(ToplevelData::default()),
+            last_committed_res: Mutex::new(None),
         }
     }
     pub async fn switch_panel_shell(&self, new_item: Arc<BinderObject<XdgBackend>>) {
@@ -205,6 +207,9 @@ impl XdgToplevel for Toplevel {
         _sender_id: ObjectId,
         title: String,
     ) -> WaylandResult<()> {
+        if let Some(panel_item) = self.panel_item() {
+            _ = panel_item.panel_shell().toplevel_title(title.clone());
+        }
         self.data.lock().title.replace(title);
         Ok(())
     }
@@ -215,6 +220,9 @@ impl XdgToplevel for Toplevel {
         _sender_id: ObjectId,
         app_id: String,
     ) -> WaylandResult<()> {
+        if let Some(panel_item) = self.panel_item() {
+            _ = panel_item.panel_shell().toplevel_app_id(app_id.clone());
+        }
         self.data.lock().app_id.replace(app_id);
         Ok(())
     }
@@ -259,11 +267,17 @@ impl XdgToplevel for Toplevel {
         width: i32,
         height: i32,
     ) -> WaylandResult<()> {
-        self.wl_surface().state_lock().pending.max_size = if width == 0 && height == 0 {
+        let size = if width == 0 && height == 0 {
             None
         } else {
             Some([width as u32, height as u32].into())
         };
+        self.wl_surface().state_lock().pending.max_size = size;
+        if let Some(panel_item) = self.panel_item() {
+            _ = panel_item
+                .panel_shell()
+                .toplevel_max_size(size.map(UVec2::from));
+        }
         Ok(())
     }
 
@@ -274,11 +288,17 @@ impl XdgToplevel for Toplevel {
         width: i32,
         height: i32,
     ) -> WaylandResult<()> {
-        self.xdg_surface.wl_surface.state_lock().pending.min_size = if width == 0 && height == 0 {
+        let size = if width == 0 && height == 0 {
             None
         } else {
             Some([width as u32, height as u32].into())
         };
+        self.wl_surface().state_lock().pending.min_size = size;
+        if let Some(panel_item) = self.panel_item() {
+            _ = panel_item
+                .panel_shell()
+                .toplevel_min_size(size.map(UVec2::from));
+        }
         Ok(())
     }
 
@@ -304,6 +324,10 @@ impl XdgToplevel for Toplevel {
         _sender_id: ObjectId,
         _output: Option<ObjectId>,
     ) -> WaylandResult<()> {
+        self.data.lock().fullscreen = true;
+        if let Some(panel_item) = self.panel_item() {
+            _ = panel_item.panel_shell().toplevel_fullscreen(true);
+        }
         Ok(())
     }
 
@@ -312,6 +336,10 @@ impl XdgToplevel for Toplevel {
         _client: &mut Self::Connection,
         _sender_id: ObjectId,
     ) -> WaylandResult<()> {
+        self.data.lock().fullscreen = false;
+        if let Some(panel_item) = self.panel_item() {
+            _ = panel_item.panel_shell().toplevel_fullscreen(false);
+        }
         Ok(())
     }
 

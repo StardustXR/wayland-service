@@ -9,13 +9,9 @@ use crate::{
         surface::Surface,
     },
 };
-use binderbinder::{
-    TransactionHandler,
-    binder_object::{BinderObject, BinderObjectRef},
-    payload::PayloadBuilder,
-};
+use binderbinder::binder_object::BinderObject;
 use dashmap::DashMap;
-use gluon_wire::{GluonCtx, GluonDataReader, impl_transaction_handler};
+use gluon::Handler;
 use stardust_xr_fusion::spatial::SpatialRef;
 use stardust_xr_gluon::AbortOnDrop;
 use stardust_xr_panel_item::protocol::{
@@ -26,13 +22,14 @@ use std::sync::Weak;
 use std::sync::{Arc, OnceLock};
 use tracing;
 
+#[derive(Handler)]
 pub struct XdgBackend {
     seat: Weak<Seat>,
     toplevel: Weak<Toplevel>,
     panel_shell: OnceLock<PanelShell>,
     output_spatial: OnceLock<SpatialRef>,
     pub children: DashMap<u64, (Weak<Surface>, ChildState)>,
-    task: OnceLock<AbortOnDrop>,
+    _task: OnceLock<AbortOnDrop>,
 }
 
 impl std::fmt::Debug for XdgBackend {
@@ -60,7 +57,7 @@ impl XdgBackend {
             children: DashMap::new(),
             panel_shell: OnceLock::from(panel_shell),
             output_spatial: OnceLock::from(output_spatial_ref),
-            task: OnceLock::new(),
+            _task: OnceLock::new(),
         };
         backend.reset_input();
         backend
@@ -77,7 +74,7 @@ impl XdgBackend {
             children: DashMap::new(),
             panel_shell: OnceLock::new(),
             output_spatial: OnceLock::new(),
-            task: OnceLock::new(),
+            _task: OnceLock::new(),
         };
         let obj = Arc::new(dev.register_object(item_backend));
         let (shell, spatial_ref_id) = item_acceptor
@@ -104,6 +101,12 @@ impl XdgBackend {
                 }
             }
         });
+        if let Some(title) = toplevel.title() {
+            _ = obj.panel_shell().toplevel_title(title);
+        }
+        if let Some(app_id) = toplevel.app_id() {
+            _ = obj.panel_shell().toplevel_app_id(app_id);
+        }
         obj
     }
 
@@ -174,13 +177,13 @@ impl XdgBackend {
     }
 }
 impl PanelItemHandler for XdgBackend {
-    async fn register_xkb_keymap(&self, _ctx: GluonCtx, xkb_keymap: String) -> KeymapId {
+    async fn register_xkb_keymap(&self, _ctx: gluon::Context, xkb_keymap: String) -> KeymapId {
         KEYMAPS.register(xkb_keymap).await
     }
 
     async fn absolute_pointer_motion(
         &self,
-        _ctx: GluonCtx,
+        _ctx: gluon::Context,
         surface: SurfaceId,
         position: stardust_xr_panel_item::protocol::Vec2,
     ) {
@@ -199,7 +202,7 @@ impl PanelItemHandler for XdgBackend {
 
     async fn relative_pointer_motion(
         &self,
-        _ctx: GluonCtx,
+        _ctx: gluon::Context,
         _surface: SurfaceId,
         delta: stardust_xr_panel_item::protocol::Vec2,
     ) {
@@ -212,7 +215,13 @@ impl PanelItemHandler for XdgBackend {
             }));
     }
 
-    async fn pointer_button(&self, _ctx: GluonCtx, surface: SurfaceId, button: u32, pressed: bool) {
+    async fn pointer_button(
+        &self,
+        _ctx: gluon::Context,
+        surface: SurfaceId,
+        button: u32,
+        pressed: bool,
+    ) {
         if let Some(surface) = self.surface_from_id(&surface) {
             let _ = self
                 .toplevel()
@@ -228,7 +237,7 @@ impl PanelItemHandler for XdgBackend {
 
     async fn pointer_scroll_discrete(
         &self,
-        _ctx: GluonCtx,
+        _ctx: gluon::Context,
         surface: SurfaceId,
         delta: stardust_xr_panel_item::protocol::Vec2,
         source: ScrollSource,
@@ -248,7 +257,7 @@ impl PanelItemHandler for XdgBackend {
 
     async fn pointer_scroll_pixels(
         &self,
-        _ctx: GluonCtx,
+        _ctx: gluon::Context,
         surface: SurfaceId,
         delta: stardust_xr_panel_item::protocol::Vec2,
         source: ScrollSource,
@@ -266,7 +275,7 @@ impl PanelItemHandler for XdgBackend {
         }
     }
 
-    async fn pointer_scroll_stop(&self, _ctx: GluonCtx, surface: SurfaceId) {
+    async fn pointer_scroll_stop(&self, _ctx: gluon::Context, surface: SurfaceId) {
         if let Some(surface) = self.surface_from_id(&surface) {
             let _ = self
                 .toplevel()
@@ -278,7 +287,7 @@ impl PanelItemHandler for XdgBackend {
 
     async fn key(
         &self,
-        _ctx: GluonCtx,
+        _ctx: gluon::Context,
         surface: SurfaceId,
         keymap: KeymapId,
         key: u32,
@@ -305,7 +314,7 @@ impl PanelItemHandler for XdgBackend {
 
     async fn touch_down(
         &self,
-        _ctx: GluonCtx,
+        _ctx: gluon::Context,
         surface: SurfaceId,
         id: u32,
         position: stardust_xr_panel_item::protocol::Vec2,
@@ -331,7 +340,7 @@ impl PanelItemHandler for XdgBackend {
 
     async fn touch_move(
         &self,
-        _ctx: GluonCtx,
+        _ctx: gluon::Context,
         id: u32,
         position: stardust_xr_panel_item::protocol::Vec2,
     ) {
@@ -351,7 +360,7 @@ impl PanelItemHandler for XdgBackend {
             }));
     }
 
-    async fn touch_up(&self, _ctx: GluonCtx, id: u32) {
+    async fn touch_up(&self, _ctx: gluon::Context, id: u32) {
         tracing::debug!("Backend: Touch up {}", id);
         let toplevel = self.toplevel();
         let _ = toplevel
@@ -360,7 +369,7 @@ impl PanelItemHandler for XdgBackend {
             .send(Message::Seat(SeatMessage::TouchUp { id }));
     }
 
-    async fn close_toplevel(&self, _ctx: GluonCtx) {
+    async fn close_toplevel(&self, _ctx: gluon::Context) {
         let _ = self
             .toplevel()
             .wl_surface()
@@ -368,7 +377,7 @@ impl PanelItemHandler for XdgBackend {
             .send(Message::CloseToplevel(self.toplevel().clone()));
     }
 
-    async fn resize_toplevel_to_app_request(&self, _ctx: GluonCtx) {
+    async fn resize_toplevel_to_app_request(&self, _ctx: gluon::Context) {
         let _ = self
             .toplevel()
             .wl_surface()
@@ -381,7 +390,7 @@ impl PanelItemHandler for XdgBackend {
 
     async fn request_toplevel_resize(
         &self,
-        _ctx: GluonCtx,
+        _ctx: gluon::Context,
         new_size: stardust_xr_panel_item::protocol::UVec2,
     ) {
         let _ = self
@@ -394,7 +403,7 @@ impl PanelItemHandler for XdgBackend {
             });
     }
 
-    async fn toplevel_focused(&self, _ctx: GluonCtx, focused: bool) {
+    async fn toplevel_focused(&self, _ctx: gluon::Context, focused: bool) {
         let _ = self
             .toplevel()
             .wl_surface()
@@ -452,4 +461,3 @@ impl XdgBackend {
             .send(Message::Seat(SeatMessage::Reset));
     }
 }
-impl_transaction_handler!(XdgBackend);

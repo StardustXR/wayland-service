@@ -1,7 +1,7 @@
 use std::{fs::OpenOptions, path::Path, sync::Arc};
 
 use binderbinder::binder_object::{BinderObject, BinderObjectOrRef, ToBinderObjectOrRef};
-use gluon_wire::{GluonCtx, impl_transaction_handler};
+use gluon::Handler;
 use pion_binder::PionBinderDevice;
 use stardust_xr_fusion::fields::FieldRef;
 use stardust_xr_panel_item::protocol::{PanelItemAcceptor, PanelItemProviderHandler, SpatialRefId};
@@ -11,7 +11,7 @@ use crate::CLIENT;
 
 pub static ACCEPTORS: RwLock<Vec<(FieldRef, PanelItemAcceptor)>> = RwLock::const_new(Vec::new());
 
-#[derive(Debug)]
+#[derive(Debug, Handler)]
 pub struct PanelItemProvider {}
 impl PanelItemProvider {
     pub async fn setup(dev: &PionBinderDevice, path: &Path) -> BinderObject<Self> {
@@ -27,7 +27,7 @@ impl PanelItemProvider {
     }
 }
 impl PanelItemProviderHandler for PanelItemProvider {
-    async fn register_acceptor(&self, _ctx: GluonCtx, acceptor: PanelItemAcceptor) {
+    async fn register_acceptor(&self, _ctx: gluon::Context, acceptor: PanelItemAcceptor) {
         tokio::spawn(async move {
             let field = acceptor.get_field().await.unwrap();
             let field_ref = FieldRef::import(CLIENT.wait(), field.id).await.unwrap();
@@ -40,7 +40,7 @@ impl PanelItemProviderHandler for PanelItemProvider {
         });
     }
 
-    async fn drop_acceptor(&self, _ctx: GluonCtx, acceptor: PanelItemAcceptor) {
+    async fn drop_acceptor(&self, _ctx: gluon::Context, acceptor: PanelItemAcceptor) {
         tokio::spawn(async move {
             remove_acceptor(acceptor).await;
         });
@@ -48,7 +48,7 @@ impl PanelItemProviderHandler for PanelItemProvider {
 
     async fn startup_token_spatial_ref(
         &self,
-        _ctx: GluonCtx,
+        _ctx: gluon::Context,
         token: String,
         spatial_ref: SpatialRefId,
     ) {
@@ -69,5 +69,3 @@ async fn remove_acceptor(acceptor: PanelItemAcceptor) {
         _ => false,
     });
 }
-
-impl_transaction_handler!(PanelItemProvider);

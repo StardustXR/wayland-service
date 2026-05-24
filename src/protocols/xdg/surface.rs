@@ -11,6 +11,7 @@ use mint::Vector2;
 use stardust_xr_fusion::spatial::{Spatial, Transform};
 use stardust_xr_panel_item::protocol::{ChildState, Rect, SurfaceId, SurfaceUpdateTarget};
 use std::sync::Arc;
+use tracing::info;
 use waynest::ObjectId;
 use waynest_protocols::server::stable::xdg_shell::xdg_popup::XdgPopup;
 pub use waynest_protocols::server::stable::xdg_shell::xdg_surface::*;
@@ -108,6 +109,18 @@ impl XdgSurface for Surface {
                 // *surface.panel_item.lock() = Arc::downgrade(&mapped_inner.panel_item);
                 mapped_lock.replace(mapped_inner);
                 return false;
+            }
+            drop(mapped_lock);
+            if let Some(panel_item) = toplevel.panel_item() {
+                let size_lock = toplevel.last_committed_res.lock();
+                if let Some(size) = surface.current_buffer_size()
+                    && size_lock.is_none_or(|v| v != size)
+                {
+                    _ = panel_item.panel_shell().toplevel_resized(Vector2 {
+                        x: size.x as u32,
+                        y: size.y as u32,
+                    });
+                }
             }
             true
         });

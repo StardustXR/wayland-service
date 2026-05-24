@@ -21,7 +21,6 @@ use std::{
     sync::{Arc, OnceLock, Weak},
 };
 use tokio::sync::broadcast::error::RecvError;
-// use stardust_xr_panel_item::
 use tracing::info;
 use waynest::ObjectId;
 use waynest_protocols::server::{

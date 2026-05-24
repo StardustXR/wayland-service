@@ -3,8 +3,8 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-use binderbinder::binder_object::{BinderObject, BinderObjectRef};
-use gluon_wire::{GluonCtx, impl_transaction_handler};
+use binderbinder::binder_object::BinderObject;
+use gluon::Handler;
 use mint::{Vector2, Vector3};
 use stardust_xr_fusion::{
     drawable::{
@@ -37,6 +37,7 @@ use crate::{
     },
 };
 
+#[derive(Handler)]
 pub struct PanelItemUi {
     toplevel: Weak<Toplevel>,
     seat: Weak<Seat>,
@@ -170,7 +171,6 @@ impl PanelItemUi {
                 let ref_space = grabbable.content_parent().clone();
                 async move {
                     Some((
-                        // TODO: try to do SDF <-> SDF intersection detection
                         field
                             .distance(&ref_space, [0.0; 3])
                             .await
@@ -217,7 +217,7 @@ impl PanelItemUi {
 impl PanelShellHandler for PanelItemUi {
     async fn update_surface_dmatex(
         &self,
-        _ctx: GluonCtx,
+        _ctx: gluon::Context,
         surface: SurfaceUpdateTarget,
         dmatex_uid: u64,
         acquire_point: u64,
@@ -253,7 +253,7 @@ impl PanelShellHandler for PanelItemUi {
 
     async fn toplevel_resized(
         &self,
-        _ctx: GluonCtx,
+        _ctx: gluon::Context,
         new_size: stardust_xr_panel_item::protocol::UVec2,
     ) {
         let size = Self::get_size([new_size.x as usize, new_size.y as usize]);
@@ -261,22 +261,34 @@ impl PanelShellHandler for PanelItemUi {
         _ = self.field.set_shape(Shape::Box(size));
     }
 
-    async fn toplevel_fullscreen(&self, _ctx: GluonCtx, _fullscreen_active: bool) {}
+    async fn toplevel_max_size(
+        &self,
+        _ctx: gluon::Context,
+        max_size: Option<stardust_xr_panel_item::protocol::UVec2>,
+    ) {
+    }
+
+    async fn toplevel_min_size(
+        &self,
+        _ctx: gluon::Context,
+        min_size: Option<stardust_xr_panel_item::protocol::UVec2>,
+    ) {
+    }
+
+    async fn toplevel_fullscreen(&self, _ctx: gluon::Context, _fullscreen_active: bool) {}
 
     // TODO: maybe impl?
-    async fn toplevel_title(&self, _ctx: GluonCtx, _title: String) {}
+    async fn toplevel_title(&self, _ctx: gluon::Context, _title: String) {}
 
     // TODO: maybe impl?
-    async fn toplevel_app_id(&self, _ctx: GluonCtx, _app_id: String) {}
+    async fn toplevel_app_id(&self, _ctx: gluon::Context, _app_id: String) {}
 
-    async fn set_cursor_visuals(&self, _ctx: GluonCtx, _geometry: Option<Geometry>) {}
+    async fn set_cursor_visuals(&self, _ctx: gluon::Context, _geometry: Option<Geometry>) {}
 
     // TODO: impl for subsurfaces
-    async fn create_child(&self, _ctx: GluonCtx, _child: ChildState) {}
+    async fn create_child(&self, _ctx: gluon::Context, _child: ChildState) {}
 
-    async fn move_child(&self, _ctx: GluonCtx, _child_id: u64, _geometry: Geometry) {}
+    async fn move_child(&self, _ctx: gluon::Context, _child_id: u64, _geometry: Geometry) {}
 
-    async fn destroy_child(&self, _ctx: GluonCtx, _child_id: u64) {}
+    async fn destroy_child(&self, _ctx: gluon::Context, _child_id: u64) {}
 }
-
-impl_transaction_handler!(PanelItemUi);
