@@ -181,10 +181,11 @@ impl PanelItemHandler for XdgBackend {
         KEYMAPS.register(xkb_keymap).await
     }
 
-    async fn absolute_pointer_motion(
+    async fn pointer_motion(
         &self,
         _ctx: gluon::Context,
         surface: SurfaceId,
+        delta: Option<stardust_xr_panel_item::protocol::Vec2>,
         position: stardust_xr_panel_item::protocol::Vec2,
     ) {
         let Some(surface) = self.surface_from_id(&surface) else {
@@ -194,24 +195,10 @@ impl PanelItemHandler for XdgBackend {
             .toplevel()
             .wl_surface()
             .message_sink
-            .send(Message::Seat(SeatMessage::AbsolutePointerMotion {
+            .send(Message::Seat(SeatMessage::PointerMotion {
                 surface,
                 position: position.into(),
-            }));
-    }
-
-    async fn relative_pointer_motion(
-        &self,
-        _ctx: gluon::Context,
-        _surface: SurfaceId,
-        delta: stardust_xr_panel_item::protocol::Vec2,
-    ) {
-        let _ = self
-            .toplevel()
-            .wl_surface()
-            .message_sink
-            .send(Message::Seat(SeatMessage::RelativePointerMotion {
-                delta: delta.into(),
+                delta: delta.map(|v| v.into()),
             }));
     }
 

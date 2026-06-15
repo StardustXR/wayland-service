@@ -13,12 +13,10 @@ use waynest_server::Client as _;
 
 #[derive(Debug)]
 pub enum SeatMessage {
-    AbsolutePointerMotion {
+    PointerMotion {
         surface: Arc<Surface>,
+        delta: Option<Vector2<f32>>,
         position: Vector2<f32>,
-    },
-    RelativePointerMotion {
-        delta: Vector2<f32>,
     },
     PointerButton {
         surface: Arc<Surface>,
@@ -95,17 +93,19 @@ impl Seat {
         message: SeatMessage,
     ) -> WaylandResult<()> {
         match message {
-            SeatMessage::AbsolutePointerMotion { surface, position } => {
+            SeatMessage::PointerMotion {
+                surface,
+                position,
+                delta,
+            } => {
                 if let Some(pointer) = self.pointer.get() {
+                    if let Some(delta) = delta {
+                        pointer
+                            .handle_relative_pointer_motion(client, delta)
+                            .await?;
+                    }
                     pointer
                         .handle_absolute_pointer_motion(client, surface, position)
-                        .await?;
-                }
-            }
-            SeatMessage::RelativePointerMotion { delta } => {
-                if let Some(pointer) = self.pointer.get() {
-                    pointer
-                        .handle_relative_pointer_motion(client, delta)
                         .await?;
                 }
             }
