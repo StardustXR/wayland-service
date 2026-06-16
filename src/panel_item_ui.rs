@@ -1,53 +1,180 @@
-use std::sync::{
-    Arc, OnceLock, Weak,
-    atomic::{AtomicBool, Ordering},
+use std::{
+    future::ready,
+    sync::{
+        Arc, OnceLock, Weak,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use binderbinder::binder_object::BinderObject;
-use gluon::Handler;
+use gluon::{Handler, ToObjectOrRef};
 use mint::{Vector2, Vector3};
 use stardust_xr_fusion::{
-    drawable::{
-        DmatexSubmitInfo, MaterialParameter, Model, ModelPart, ModelPartAspect, import_dmatex_uid,
+    client::FrameInfo,
+    dmatex::{DmatexRef, DmatexSubmitRelease},
+    drawable::{MaterialParameter, Model, ModelExt as _, ModelPart},
+    fields::{Field, FieldExt, FieldRef, Shape},
+    query::{InterfaceDependency, QueriedInterface, QueryableObjectRef},
+    spatial::{Spatial, SpatialExt as _, SpatialRef, Transform},
+    spatial_query::{
+        Point, PointsQuery, PointsQueryHandle, PointsQueryHandler, PointsQueryHandlerHandler,
     },
-    fields::{Field, FieldAspect, FieldRefAspect, Shape},
-    node::NodeType,
-    root::FrameInfo,
-    spatial::{Spatial, SpatialAspect, SpatialRef, Transform},
-    values::ResourceID,
+    types::{Resource, Size2},
 };
-use stardust_xr_gluon::AbortOnDrop;
-use stardust_xr_molecules::{FrameSensitive, Grabbable, GrabbableSettings, PointerMode, UIElement};
-use stardust_xr_panel_item::protocol::{
-    ChildState, Geometry, PanelItem, PanelShell, PanelShellHandler, SurfaceUpdateTarget,
+use stardust_xr_molecules::{
+    FrameSensitive, UIElement,
+    grabbable::{Grabbable, GrabbableSettings, PointerMode},
 };
-use tokio::{
-    sync::{RwLock, broadcast::error::RecvError},
-    task::JoinSet,
+use stardust_xr_panel_item::{
+    panel_item::{ChildState, Geometry, PanelShell, PanelShellHandler, SurfaceUpdateTarget},
+    panel_item_acceptor::{self, PanelItemAcceptor},
 };
-use tracing::trace;
+use tokio::sync::{RwLock, broadcast::error::RecvError};
 
 use crate::{
-    BINDER_DEV, CLIENT, DBUS,
+    BINDER_DEV, CLIENT,
     frame_dispatcher::FRAME_EVENT_PROVIDER,
-    panel_item_provider::ACCEPTORS,
     protocols::{
         core::seat::Seat,
         xdg::{backend::XdgBackend, toplevel::Toplevel},
     },
+    util::AbortOnDrop,
 };
+
+#[derive(Debug, Handler)]
+struct ItemHandlerQuery {
+    toplevel: Weak<Toplevel>,
+    seat: Weak<Seat>,
+    replaced: AtomicBool,
+    handle: OnceLock<PointsQueryHandle>,
+}
+impl ItemHandlerQuery {
+    async fn new(
+        toplevel: Weak<Toplevel>,
+        seat: Weak<Seat>,
+        ref_space: SpatialRef,
+        size: impl Into<Vector2<usize>>,
+    ) -> BinderObject<Self> {
+        let obj = BINDER_DEV.wait().register_object(Self {
+            toplevel,
+            seat,
+            replaced: AtomicBool::new(false),
+            handle: OnceLock::new(),
+        });
+        let handle = CLIENT
+            .wait()
+            .spatial_query_interface()
+            .points_query(PointsQuery {
+                handler: PointsQueryHandler::from_handler(&obj),
+                interfaces: vec![InterfaceDependency {
+                    id: panel_item_acceptor::EXTERNAL_PROTOCOL.protocol_name.into(),
+                    optional: false,
+                }],
+                reference_spatial: ref_space,
+                points: Self::get_points(size),
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        obj.handle.set(handle).unwrap();
+        tracing::error!("creating object: {:?}", obj.id());
+        obj
+    }
+    fn get_points(size: impl Into<Vector2<usize>>) -> Vec<Point> {
+        let mut size = PanelItemUi::get_size(size);
+        size.z *= 4.0;
+        vec![
+            Point {
+                point: [0.0; 3].into(),
+                margin: size.z * 0.5,
+            },
+            Point {
+                point: [size.x * 0.5, size.y * 0.5, 0.0].into(),
+                margin: size.z * 0.5,
+            },
+            Point {
+                point: [-size.x * 0.5, size.y * 0.5, 0.0].into(),
+                margin: size.z * 0.5,
+            },
+            Point {
+                point: [size.x * 0.5, -size.y * 0.5, 0.0].into(),
+                margin: size.z * 0.5,
+            },
+            Point {
+                point: [-size.x * 0.5, -size.y * 0.5, 0.0].into(),
+                margin: size.z * 0.5,
+            },
+        ]
+    }
+}
+impl PointsQueryHandlerHandler for ItemHandlerQuery {
+    async fn entered(
+        &self,
+        _ctx: gluon::Context,
+        _obj: QueryableObjectRef,
+        _field: FieldRef,
+        _spatial: SpatialRef,
+        interfaces: Vec<QueriedInterface>,
+        _distance: f32,
+    ) {
+        tracing::info!("entered");
+        let v = interfaces
+            .into_iter()
+            .find(|v| v.interface_id == panel_item_acceptor::EXTERNAL_PROTOCOL.protocol_name);
+        if let Some(v) = v {
+            let acceptor = PanelItemAcceptor::from_object_or_ref(v.interface);
+            let Some(toplevel) = self.toplevel.upgrade() else {
+                tracing::warn!("failed to upgrade toplevel");
+                return;
+            };
+            let Some(seat) = self.seat.upgrade() else {
+                tracing::warn!("failed to upgrade seat");
+                return;
+            };
+            tracing::info!("connecting to new panel item acceptor");
+            let obj = XdgBackend::connect(acceptor, &seat, &toplevel).await;
+            toplevel.switch_panel_shell(obj).await;
+            self.replaced.store(true, Ordering::Relaxed);
+        }
+    }
+
+    fn interfaces_changed(
+        &self,
+        _ctx: gluon::Context,
+        _obj: QueryableObjectRef,
+        _interfaces: Vec<QueriedInterface>,
+    ) -> impl Future<Output = ()> + Send + Sync {
+        ready(())
+    }
+
+    fn moved(
+        &self,
+        _ctx: gluon::Context,
+        _obj: QueryableObjectRef,
+        _distance: f32,
+    ) -> impl Future<Output = ()> + Send + Sync {
+        ready(())
+    }
+
+    fn left(
+        &self,
+        _ctx: gluon::Context,
+        _obj: QueryableObjectRef,
+    ) -> impl Future<Output = ()> + Send + Sync {
+        ready(())
+    }
+}
 
 #[derive(Handler)]
 pub struct PanelItemUi {
-    toplevel: Weak<Toplevel>,
-    seat: Weak<Seat>,
     root: Spatial,
     model: Model,
+    model_spatial: Spatial,
     field: Field,
     part: ModelPart,
     input_task: OnceLock<AbortOnDrop>,
     grabbable: RwLock<Grabbable>,
-    replaced: AtomicBool,
+    query: BinderObject<ItemHandlerQuery>,
 }
 
 impl std::fmt::Debug for PanelItemUi {
@@ -62,71 +189,88 @@ impl std::fmt::Debug for PanelItemUi {
 }
 
 impl PanelItemUi {
-    pub fn new(
+    pub async fn new(
         at: SpatialRef,
         seat: &Arc<Seat>,
         toplevel: &Arc<Toplevel>,
     ) -> Arc<BinderObject<XdgBackend>> {
         let client = CLIENT.wait();
-        let conn = DBUS.wait();
         let dev = BINDER_DEV.wait();
         let size = toplevel
             .wl_surface()
             .current_buffer_size()
             .unwrap_or([1, 1].into());
-        let root = Spatial::create(&at, Transform::identity()).unwrap();
-        root.set_spatial_parent_in_place(client.get_root()).unwrap();
-        let field = Field::create(
-            &root,
-            Transform::identity(),
-            Shape::Box(Self::get_size(size)),
-        )
-        .unwrap();
-        let id = root.id();
-        let grabbable = Grabbable::create(
-            conn.clone(),
-            format!("/Panel{id:x}"),
-            &root,
-            Transform::identity(),
-            &field,
-            GrabbableSettings {
-                max_distance: 0.02,
-                // linear_momentum: Some(MomentumSettings {
-                //     drag: 0.9,
-                //     threshold: 0.02,
-                // }),
-                linear_momentum: None,
-                angular_momentum: None,
-                magnet: false,
-                pointer_mode: PointerMode::Parent,
-                reparentable: true,
+        let (root, root_ref) = Spatial::new(client, &at, Transform::IDENTITY)
+            .await
+            .unwrap();
+        root.set_parent_in_place(client.root().clone()).unwrap();
+        let (field_spatial, field_spatial_ref) =
+            Spatial::new(client, &root_ref, Transform::IDENTITY)
+                .await
+                .unwrap();
+        let (field, _) = Field::new(
+            client,
+            &field_spatial,
+            Shape::Box {
+                size: Self::get_size(size),
             },
         )
+        .await
         .unwrap();
-        field
-            .set_spatial_parent(&grabbable.content_parent())
-            .unwrap();
-        let model = Model::create(
-            &field,
-            Transform::from_scale(Self::get_size(size)),
-            &ResourceID::new_namespaced("wayland-service", "panel"),
+        let grabbable = Grabbable::new(
+            client,
+            root_ref,
+            Transform::IDENTITY,
+            field.clone(),
+            GrabbableSettings {
+                max_distance: 0.02,
+                linear_momentum: None,
+                angular_momentum: None,
+                pointer_mode: PointerMode::Parent,
+            },
         )
+        .await
         .unwrap();
-        let part = model.part("Panel").unwrap();
+        field_spatial
+            .set_parent(grabbable.content_parent().spatial_ref().await.unwrap())
+            .unwrap();
+        let (model_spatial, _) = Spatial::new(
+            client,
+            &field_spatial_ref,
+            Transform::from_scale(Self::get_size(size)),
+        )
+        .await
+        .unwrap();
+        let model = Model::new(
+            client,
+            &model_spatial,
+            Resource::Namespaced {
+                namespace: "wayland-service".into(),
+                path: "panel".into(),
+            },
+        )
+        .await
+        .unwrap();
+        let part = model.get_part("Panel").await.unwrap().unwrap();
+        let query = ItemHandlerQuery::new(
+            Arc::downgrade(&toplevel),
+            Arc::downgrade(&seat),
+            field_spatial_ref,
+            size,
+        )
+        .await;
         let obj = dev.register_object(Self {
-            toplevel: Arc::downgrade(&toplevel),
-            seat: Arc::downgrade(&seat),
             root,
             model,
             field,
             part,
             grabbable: RwLock::new(grabbable),
             input_task: OnceLock::new(),
-            replaced: AtomicBool::new(false),
+            model_spatial,
+            query,
         });
         let panel_shell = PanelShell::from_handler(&obj);
         let backend = dev.register_object(XdgBackend::new(seat, toplevel, panel_shell, at));
-        let panel_item = PanelItem::from_handler(&backend);
         let input_task = tokio::spawn({
             let obj = Arc::downgrade(&obj);
             async move {
@@ -143,9 +287,10 @@ impl PanelItemUi {
                     let Some(obj) = obj.upgrade() else {
                         break;
                     };
-                    if obj.replaced.load(Ordering::Relaxed) {
+                    if obj.query.replaced.load(Ordering::Relaxed) {
                         break;
                     }
+                    // tracing::info!("got frame event");
                     obj.update_input(frame_info).await
                 }
             }
@@ -154,7 +299,10 @@ impl PanelItemUi {
         let drop_future = obj.strong_refs_hit_zero();
         tokio::spawn(async move {
             drop_future.await;
-            tracing::debug!("dropping panel item ui: {:?}", obj.root.id());
+            tracing::debug!(
+                "dropping panel item ui: {:?}",
+                obj.root.to_binder_object_or_ref()
+            );
         });
         Arc::new(backend)
     }
@@ -163,44 +311,8 @@ impl PanelItemUi {
         if grabbable.handle_events() {
             grabbable.frame(&frame_info);
         }
-        if self.replaced.load(Ordering::Relaxed) {
+        if self.query.replaced.load(Ordering::Relaxed) {
             return;
-        }
-        let mut join_set = JoinSet::from_iter(ACCEPTORS.read().await.iter().cloned().map(
-            |(field, acceptor)| {
-                let ref_space = grabbable.content_parent().clone();
-                async move {
-                    Some((
-                        field
-                            .distance(&ref_space, [0.0; 3])
-                            .await
-                            .inspect_err(|err| {
-                                tracing::error!("failed to get field distance: {err}")
-                            })
-                            .ok()?,
-                        acceptor,
-                    ))
-                }
-            },
-        ));
-        while let Some(v) = join_set.join_next().await {
-            let Ok(Some((distance, acceptor))) = v else {
-                continue;
-            };
-            trace!(distance);
-            if distance <= 0.01 {
-                let Some(toplevel) = self.toplevel.upgrade() else {
-                    break;
-                };
-                let Some(seat) = self.seat.upgrade() else {
-                    break;
-                };
-                tracing::info!("connecting to new panel item acceptor");
-                let obj = XdgBackend::connect(acceptor, &seat, &toplevel).await;
-                toplevel.switch_panel_shell(obj).await;
-                self.replaced.store(true, Ordering::Relaxed);
-                break;
-            }
         }
     }
 }
@@ -219,61 +331,48 @@ impl PanelShellHandler for PanelItemUi {
         &self,
         _ctx: gluon::Context,
         surface: SurfaceUpdateTarget,
-        dmatex_uid: u64,
+        dmatex: DmatexRef,
         acquire_point: u64,
-        release_point: u64,
+        release_point: DmatexSubmitRelease,
         opaque: bool,
     ) {
         // TODO: remove this when children are implemented
-        // if !matches!(surface, SurfaceUpdateTarget::Toplevel) {
-        //     tracing::warn!(
-        //         "surface update early exit, this will cause these surfaces to freeze since the buffers are never release"
-        //     );
-        //     return;
-        // }
+        if !matches!(surface, SurfaceUpdateTarget::Toplevel) {
+            tracing::warn!("surface update early exit");
+            return;
+        }
         _ = self
             .part
-            .set_material_parameter("opaque", MaterialParameter::Bool(opaque));
+            .set_material_parameter("opaque", MaterialParameter::Bool { value: opaque })
+            .await;
         _ = self
             .part
-            .set_material_parameter("unlit", MaterialParameter::Bool(true));
-        // TODO: fix possible dmatex collision, even if unlikely, probably by just making dmatex a
-        // binder object
-        let dmatex_id = CLIENT.wait().generate_id();
-        _ = import_dmatex_uid(CLIENT.wait(), dmatex_id, dmatex_uid);
-        _ = self.part.set_material_parameter(
-            "diffuse",
-            MaterialParameter::Dmatex(DmatexSubmitInfo {
-                dmatex_id,
-                acquire_point,
-                release_point,
-            }),
-        )
+            .set_material_parameter("unlit", MaterialParameter::Bool { value: true })
+            .await;
+        self.part
+            .set_material_parameter(
+                "diffuse",
+                MaterialParameter::Dmatex {
+                    dmatex,
+                    acquire_point,
+                    release_point,
+                },
+            )
+            .await
+            .unwrap();
     }
 
-    async fn toplevel_resized(
-        &self,
-        _ctx: gluon::Context,
-        new_size: stardust_xr_panel_item::protocol::UVec2,
-    ) {
+    async fn toplevel_resized(&self, _ctx: gluon::Context, new_size: Size2) {
         let size = Self::get_size([new_size.x as usize, new_size.y as usize]);
-        _ = self.model.set_local_transform(Transform::from_scale(size));
-        _ = self.field.set_shape(Shape::Box(size));
+        _ = self
+            .model_spatial
+            .set_local_transform(Transform::from_scale(size));
+        _ = self.field.set_shape(Shape::Box { size });
     }
 
-    async fn toplevel_max_size(
-        &self,
-        _ctx: gluon::Context,
-        max_size: Option<stardust_xr_panel_item::protocol::UVec2>,
-    ) {
-    }
+    async fn toplevel_max_size(&self, _ctx: gluon::Context, _max_size: Option<Size2>) {}
 
-    async fn toplevel_min_size(
-        &self,
-        _ctx: gluon::Context,
-        min_size: Option<stardust_xr_panel_item::protocol::UVec2>,
-    ) {
-    }
+    async fn toplevel_min_size(&self, _ctx: gluon::Context, _min_size: Option<Size2>) {}
 
     async fn toplevel_fullscreen(&self, _ctx: gluon::Context, _fullscreen_active: bool) {}
 

@@ -2,11 +2,13 @@ use crate::client::{Client, MessageSink};
 use crate::error::WaylandResult;
 use crate::protocols::core::shm_buffer_backing::ShmBufferBacking;
 use crate::protocols::dmabuf::buffer_backing::DmabufBacking;
+use crate::util::AbortOnDrop;
 
 use mint::Vector2;
-use stardust_xr_gluon::AbortOnDrop;
+use stardust_xr_fusion::dmatex::DmatexRef;
 use std::sync::Arc;
 use std::time::Duration;
+use timeline_syncobj::timeline_syncobj::TimelineSyncObj;
 use waynest::ObjectId;
 pub use waynest_protocols::server::core::wayland::wl_buffer::*;
 use waynest_server::{Client as _, RequestDispatcher};
@@ -43,8 +45,8 @@ impl Buffer {
     }
 
     /// returns (dmatex_uid, server_acquire_point, server_release_point)
-    pub fn update(self: &Arc<Self>) -> (u64, u64, u64) {
-        let (dmatex_uid, acquire, release) = match &self.backing {
+    pub fn update(self: &Arc<Self>) -> (DmatexRef, Arc<TimelineSyncObj>, u64, u64) {
+        let (dmatex, acquire, release) = match &self.backing {
             BufferBacking::Dmabuf(backing) => backing.update(),
             BufferBacking::Shm(backing) => backing.update(),
         };
@@ -55,18 +57,19 @@ impl Buffer {
         tokio::spawn({
             let message_sink = self.message_sink.clone();
             let buffer = self.clone();
+            let timeline = timeline.clone();
             async move {
-            
                 let _task: AbortOnDrop = tokio::spawn(async {
                     tokio::time::sleep(Duration::from_millis(500)).await;
                     tracing::warn!("buffer not released for 500ms");
-                }).into();
+                })
+                .into();
                 timeline.wait_async(release).unwrap().await;
                 tracing::trace!("sending buffer release");
                 message_sink.send(crate::client::Message::ReleaseBuffer(buffer))
             }
         });
-        (dmatex_uid, acquire, release)
+        (dmatex, timeline, acquire, release)
     }
 
     pub fn is_transparent(&self) -> bool {

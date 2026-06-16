@@ -10,7 +10,7 @@ use binderbinder::binder_object::BinderObject;
 use mint::Vector2;
 use parking_lot::Mutex;
 use stardust_xr_fusion::spatial::SpatialRef;
-use stardust_xr_panel_item::protocol::{SurfaceUpdateTarget, UVec2};
+use stardust_xr_panel_item::panel_item::SurfaceUpdateTarget;
 use std::sync::Arc;
 use waynest::ObjectId;
 pub use waynest_protocols::server::stable::xdg_shell::xdg_toplevel::*;
@@ -23,9 +23,9 @@ pub struct MappedInner {
 impl MappedInner {
     // TODO: add local panel item ui and make switching work by aborting the release task and
     // recreating it with a new release point in the timeline
-    pub fn create(seat: &Arc<Seat>, toplevel: &Arc<Toplevel>, at: SpatialRef) -> Self {
+    pub async fn create(seat: &Arc<Seat>, toplevel: &Arc<Toplevel>, at: SpatialRef) -> Self {
         // TODO: error handling
-        let panel_item = PanelItemUi::new(at, seat, toplevel);
+        let panel_item = PanelItemUi::new(at, seat, toplevel).await;
         Self { panel_item }
     }
 }
@@ -276,7 +276,7 @@ impl XdgToplevel for Toplevel {
         if let Some(panel_item) = self.panel_item() {
             _ = panel_item
                 .panel_shell()
-                .toplevel_max_size(size.map(UVec2::from));
+                .toplevel_max_size(size);
         }
         Ok(())
     }
@@ -297,7 +297,7 @@ impl XdgToplevel for Toplevel {
         if let Some(panel_item) = self.panel_item() {
             _ = panel_item
                 .panel_shell()
-                .toplevel_min_size(size.map(UVec2::from));
+                .toplevel_min_size(size);
         }
         Ok(())
     }

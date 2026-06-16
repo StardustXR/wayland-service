@@ -7,6 +7,7 @@ use crate::{
         presentation::{MonotonicTimestamp, PresentationFeedback},
         xdg::{backend::XdgBackend, toplevel::Toplevel},
     },
+    signal_on_drop::SignalOnDrop,
     util::{
         BufferedState, SurfaceCommitAwareBuffer, SurfaceCommitAwareBufferManager,
         registry::Registry,
@@ -15,7 +16,7 @@ use crate::{
 use binderbinder::binder_object::BinderObject;
 use mint::Vector2;
 use parking_lot::{Mutex, RwLock};
-use stardust_xr_panel_item::protocol::{Geometry, SurfaceUpdateTarget};
+use stardust_xr_panel_item::panel_item::{Geometry, SurfaceUpdateTarget};
 use std::{
     fmt::Display,
     sync::{Arc, OnceLock, Weak},
@@ -410,21 +411,24 @@ impl Surface {
 }
 impl Surface {
     pub(super) fn buffer_update(&self) {
-        if let Some(buffer) = self.state.lock().current().buffer.as_ref()
-            && let Some(panel_item) = self.panel_item()
-            && let Some(surface_id) = self.surface_id.get()
-        {
-            let (dmatex_uid, acquire, release) = buffer.update();
-            panel_item
-                .panel_shell()
-                .update_surface_dmatex(
-                    *surface_id,
-                    dmatex_uid,
-                    acquire,
-                    release,
-                    !buffer.is_transparent(),
-                )
-                .unwrap();
+        if let Some(buffer) = self.state.lock().current().buffer.as_ref() {
+            let (dmatex, timeline, acquire, release) = buffer.update();
+            let release = SignalOnDrop::new(timeline, release);
+            if let Some(panel_item) = self.panel_item()
+                && let Some(surface_id) = self.surface_id.get()
+            {
+                // TODO: figure out something better for panel shell migration
+                panel_item
+                    .panel_shell()
+                    .update_surface_dmatex(
+                        *surface_id,
+                        dmatex,
+                        acquire,
+                        release,
+                        !buffer.is_transparent(),
+                    )
+                    .unwrap();
+            }
         }
     }
 

@@ -4,7 +4,6 @@ use std::{
     time::Duration,
 };
 
-use stardust_xr_fusion::AbortOnDrop;
 use tokio::{net::UnixStream, sync::mpsc};
 use tokio_stream::StreamExt as _;
 use tracing::debug_span;
@@ -16,6 +15,7 @@ use crate::{
     client::{Client, Message},
     display::Display,
     error::{WaylandError, WaylandResult},
+    util::AbortOnDrop,
 };
 
 pub struct Wayland {
@@ -26,9 +26,9 @@ pub struct Wayland {
 }
 impl Wayland {
     pub fn new(socket_path: &Path) -> WaylandResult<Self> {
-        let (socket_path, _lockfile, lock_path) = create_socket(socket_path).ok_or(WaylandError::Io(
-            std::io::ErrorKind::AddrNotAvailable.into(),
-        ))?;
+        let (socket_path, _lockfile, lock_path) = create_socket(socket_path).ok_or(
+            WaylandError::Io(std::io::ErrorKind::AddrNotAvailable.into()),
+        )?;
         let listener = waynest_server::Listener::new_with_path(&socket_path).unwrap();
         let socket_path = listener.socket_path().to_path_buf();
         let _abort_handle = tokio::spawn(
@@ -41,7 +41,7 @@ impl Wayland {
             _lockfile,
             _abort_handle,
             socket_path,
-            lock_path
+            lock_path,
         })
     }
     pub fn socket_path(&self) -> &Path {
@@ -150,6 +150,8 @@ impl WaylandClient {
                         // Client disconnected, end the dispatch loop
                         return Ok(());
                     };
+                    let msg_clone = msg.clone();
+                    tracing::trace!(?msg, "dispatching wayland event");
                     if let Err(e) = client
                         .get_raw(msg.object_id())
                         .ok_or(WaylandError::MissingObject(msg.object_id()))?
@@ -159,7 +161,7 @@ impl WaylandClient {
                         if let WaylandError::Fatal { object_id, code, message } = e {
                             client.display().error(&mut client, ObjectId::DISPLAY, object_id, code, message.to_string()).await?;
                         }
-                        tracing::error!("Wayland: {e}");
+                        tracing::error!(?msg_clone,"Wayland: {e}");
                         return Err(e);
                     }
                 }

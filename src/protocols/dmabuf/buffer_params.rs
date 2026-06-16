@@ -7,11 +7,8 @@ use crate::{
 use drm_fourcc::DrmFourcc;
 use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
-use stardust_xr_fusion::drawable::DmatexPlane;
-use std::{
-    os::fd::{AsRawFd, OwnedFd},
-    sync::OnceLock,
-};
+use stardust_xr_fusion::dmatex::DmatexPlane;
+use std::{os::fd::OwnedFd, sync::OnceLock};
 use waynest::ObjectId;
 use waynest_protocols::server::stable::linux_dmabuf_v1::zwp_linux_buffer_params_v1::{
     Error, Flags, ZwpLinuxBufferParamsV1,
@@ -90,8 +87,8 @@ impl ZwpLinuxBufferParamsV1 for BufferParams {
         // Create plane with the provided parameters
         let plane = DmatexPlane {
             dmabuf_fd: fd.into(),
-            offset,
-            row_size: stride as u32,
+            offset: offset as u64,
+            row_size: stride as u64,
             array_element_size: 0,
             depth_slice_size: 0,
         };

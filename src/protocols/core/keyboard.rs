@@ -1,119 +1,31 @@
 use dashmap::{DashMap, DashSet};
 use memfd::MemfdOptions;
 use parking_lot::Mutex;
-use rustc_hash::FxHashMap;
-use stardust_xr_fusion::items::panel::get_keymap;
-use stardust_xr_panel_item::protocol::KeymapId;
+use stardust_xr_fusion::keymap::Keymap;
 use std::{
-    collections::HashSet,
     io::Write,
     os::{
         fd::{AsFd, IntoRawFd},
         unix::io::{FromRawFd, OwnedFd},
     },
-    sync::{Arc, LazyLock, Weak},
+    sync::{Arc, Weak},
 };
-use tokio::sync::{RwLock, RwLockReadGuard};
+use tokio::sync::RwLock;
 use waynest::ObjectId;
 pub use waynest_protocols::server::core::wayland::wl_keyboard::*;
 
-use crate::{CLIENT, client::Client, error::WaylandResult, protocols::core::surface::Surface};
-
-#[derive(Default)]
-struct ModifierState {
-    pressed_keys: HashSet<u32>,
-    mods_depressed: u32,
-    mods_latched: u32,
-    mods_locked: u32,
-    group: u32,
-}
-pub struct KeymapManager(LazyLock<RwLock<FxHashMap<u64, String>>>);
-impl KeymapManager {
-    const fn new() -> Self {
-        Self(LazyLock::new(RwLock::default))
-    }
-    pub async fn register(&self, keymap: String) -> KeymapId {
-        let id = if let Some((key, _)) = self.0.read().await.iter().find(|(_, v)| *v == &keymap) {
-            *key
-        } else {
-            let id = CLIENT.wait().generate_id();
-            self.0.write().await.insert(id, keymap);
-            id
-        };
-
-        KeymapId { id }
-    }
-    pub async fn get(&self, id: u64) -> Option<RwLockReadGuard<'_, str>> {
-        if let Ok(v) =
-            RwLockReadGuard::try_map(self.0.read().await, |v| v.get(&id).map(|s| s.as_str()))
-        {
-            return Some(v);
-        }
-        let sd_client = CLIENT.wait();
-        tracing::info!("getting keymap from the stardust server");
-        if let Ok(keymap_data) = get_keymap(sd_client, id).await {
-            self.0.write().await.insert(id, keymap_data);
-            return Some(RwLockReadGuard::map(self.0.read().await, |v| {
-                v.get(&id).unwrap().as_str()
-            }));
-        }
-        None
-    }
-}
-pub static KEYMAPS: KeymapManager = KeymapManager::new();
-
-impl ModifierState {
-    fn update_key(&mut self, key: u32, pressed: bool) -> bool {
-        let changed = if pressed {
-            self.pressed_keys.insert(key)
-        } else {
-            self.pressed_keys.remove(&key)
-        };
-
-        if changed {
-            self.update_modifiers();
-        }
-        changed
-    }
-
-    fn update_modifiers(&mut self) {
-        let mut mods = 0;
-
-        // TODO: use the actual keymap lol
-        // Update modifier state based on currently pressed keys
-        for key in &self.pressed_keys {
-            match *key {
-                input_event_codes::KEY_LEFTSHIFT!() | input_event_codes::KEY_RIGHTSHIFT!() => {
-                    mods |= 1
-                }
-                input_event_codes::KEY_LEFTCTRL!() | input_event_codes::KEY_RIGHTCTRL!() => {
-                    mods |= 4
-                }
-                input_event_codes::KEY_LEFTALT!() => mods |= 8,
-                input_event_codes::KEY_RIGHTALT!() => mods |= 128,
-                input_event_codes::KEY_LEFTMETA!() | input_event_codes::KEY_RIGHTMETA!() => {
-                    mods |= 64
-                }
-                input_event_codes::KEY_CAPSLOCK!() => {
-                    mods |= 2;
-                    self.mods_locked ^= 2;
-                }
-                _ => {}
-            }
-        }
-
-        self.mods_depressed = mods;
-    }
-}
+use crate::{
+    KEYMAP_STORE, client::Client, error::WaylandResult, protocols::core::surface::Surface,
+};
 
 #[derive(waynest_server::RequestDispatcher)]
 #[waynest(error = crate::error::WaylandError, connection = crate::client::Client)]
 pub struct Keyboard {
     pub id: ObjectId,
     focused_surface: Mutex<Weak<Surface>>,
-    modifier_state: Mutex<ModifierState>,
     pressed_keys: DashMap<ObjectId, DashSet<u32>>,
-    current_keymap_id: Mutex<u64>,
+    // TODO: maybe just store a hash here to not keep the handle alive?
+    current_keymap_id: RwLock<Option<Keymap>>,
 }
 
 impl Keyboard {
@@ -121,9 +33,8 @@ impl Keyboard {
         Self {
             id,
             focused_surface: Mutex::new(Weak::new()),
-            modifier_state: Mutex::new(ModifierState::default()),
             pressed_keys: DashMap::default(),
-            current_keymap_id: Mutex::new(0),
+            current_keymap_id: RwLock::new(None),
         }
     }
 
@@ -155,21 +66,25 @@ impl Keyboard {
         &self,
         client: &mut Client,
         surface: Arc<Surface>,
-        keymap_id: u64,
+        keymap: Keymap,
         key: u32,
         pressed: bool,
+        modifier_state: stardust_xr_panel_item::panel_item::ModifierState,
     ) -> WaylandResult<()> {
-        // KEYMAP UPDATES
+        if self
+            .current_keymap_id
+            .read()
+            .await
+            .as_ref()
+            .is_none_or(|v| v != &keymap)
         {
-            let mut old_keymap_id = self.current_keymap_id.lock();
-
-            if *old_keymap_id != keymap_id {
-                if let Some(keymap_data) = KEYMAPS.get(keymap_id).await {
-                    self.send_keymap(client, keymap_data.as_bytes()).await?;
-                }
+            let Ok(Some(fd)) = KEYMAP_STORE.wait().get(keymap.clone()).await else {
+                return Ok(());
             };
-            *old_keymap_id = keymap_id;
-        }
+            self.keymap(client, self.id, KeymapFormat::XkbV1, fd.fd.as_fd(), fd.size)
+                .await?;
+            self.current_keymap_id.write().await.replace(keymap);
+        };
 
         // PRESSED KEYS UPDATE
         let pressed_keys = self.pressed_keys.entry(surface.id).or_default();
@@ -182,7 +97,6 @@ impl Keyboard {
 
         // FOCUS UPDATES
         let mut focused = self.focused_surface.lock();
-        let mut modifier_state = self.modifier_state.lock();
 
         let refocus = focused.as_ptr() != Arc::as_ptr(&surface);
         // If we're entering a new surface
@@ -210,10 +124,10 @@ impl Keyboard {
                 client,
                 self.id,
                 serial,
-                modifier_state.mods_depressed,
-                modifier_state.mods_latched,
-                modifier_state.mods_locked,
-                modifier_state.group,
+                modifier_state.depressed,
+                modifier_state.latched,
+                modifier_state.locked,
+                0,
             )
             .await?;
             // println!("Entered new surface {}", surface.id);
@@ -242,48 +156,30 @@ impl Keyboard {
         )
         .await?;
 
-        // MODIFIER UPDATES
-        // Update modifier state and send modifiers event if changed
-        if modifier_state.update_key(key, pressed) {
-            // println!("Update modifiers");
-            let serial = client.next_event_serial();
-            self.modifiers(
-                client,
-                self.id,
-                serial,
-                modifier_state.mods_depressed,
-                modifier_state.mods_latched,
-                modifier_state.mods_locked,
-                modifier_state.group,
-            )
-            .await?;
-        }
-
-        Ok(())
-    }
-
-    pub async fn reset(&self, client: &mut Client) -> WaylandResult<()> {
-        let mut modifier_state = self.modifier_state.lock();
-        if *self.current_keymap_id.lock() == 0 {
-            return Ok(());
-        }
-        modifier_state.pressed_keys.clear();
-        modifier_state.mods_depressed = 0;
-        modifier_state.mods_latched = 0;
-        modifier_state.mods_locked = 0;
-        modifier_state.group = 0;
-
+        // println!("Update modifiers");
         let serial = client.next_event_serial();
         self.modifiers(
             client,
             self.id,
             serial,
-            modifier_state.mods_depressed,
-            modifier_state.mods_latched,
-            modifier_state.mods_locked,
-            modifier_state.group,
+            modifier_state.depressed,
+            modifier_state.latched,
+            modifier_state.locked,
+            // TODO: properly forward group
+            0,
         )
-        .await
+        .await?;
+
+        Ok(())
+    }
+
+    pub async fn reset(&self, client: &mut Client) -> WaylandResult<()> {
+        if self.current_keymap_id.read().await.is_none() {
+            return Ok(());
+        }
+
+        let serial = client.next_event_serial();
+        self.modifiers(client, self.id, serial, 0, 0, 0, 0).await
     }
 }
 

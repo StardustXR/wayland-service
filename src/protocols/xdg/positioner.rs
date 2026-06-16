@@ -1,7 +1,7 @@
 use crate::error::WaylandResult;
 use mint::Vector2;
 use parking_lot::Mutex;
-use stardust_xr_panel_item::protocol::Geometry;
+use stardust_xr_panel_item::panel_item::Geometry;
 use waynest::ObjectId;
 use waynest_protocols::server::stable::xdg_shell::xdg_positioner::*;
 use waynest_server::Client as _;

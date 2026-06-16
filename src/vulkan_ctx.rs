@@ -1,7 +1,7 @@
 use std::sync::{Arc, OnceLock};
 
 use stardust_xr_cme::{dmatex::Dmatex, render_device::RenderDevice};
-use stardust_xr_fusion::ClientHandle;
+use stardust_xr_fusion::client::{Client, ClientHandler};
 use tracing::{debug, error, info, warn};
 use vulkano::{
     VulkanLibrary,
@@ -31,7 +31,7 @@ pub struct VkContext {
 pub static VK: OnceLock<VkContext> = OnceLock::new();
 impl VkContext {
     // TODO: proper error handling?
-    pub async fn init(client: &Arc<ClientHandle>) {
+    pub async fn init(client: &Arc<Client<impl ClientHandler>>) {
         let render_dev = RenderDevice::primary_server_device(client).await.unwrap();
         let entry = VulkanLibrary::new().unwrap();
         let debug_callback = unsafe { DebugUtilsMessengerCallback::new(debug_callback) };

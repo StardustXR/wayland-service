@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use pin_project_lite::pin_project;
-use stardust_xr_fusion::values::Vector2;
+use stardust_xr_fusion::types::Size2;
 use tokio::{net::UnixStream, sync::mpsc};
 use tokio_stream::Stream;
 use waynest::{Connection, ProtocolError, Socket};
@@ -28,7 +28,7 @@ pub enum Message {
     CloseToplevel(Arc<Toplevel>),
     ResizeToplevel {
         toplevel: Arc<Toplevel>,
-        size: Option<Vector2<u32>>,
+        size: Option<Size2>,
     },
     ReconfigureToplevel(Arc<Toplevel>),
     SetToplevelVisualActive {

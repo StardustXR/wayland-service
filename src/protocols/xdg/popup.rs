@@ -5,7 +5,7 @@ use super::{
 use crate::error::WaylandResult;
 use parking_lot::Mutex;
 use rand::random;
-use stardust_xr_panel_item::protocol::SurfaceUpdateTarget;
+use stardust_xr_panel_item::panel_item::SurfaceUpdateTarget;
 use std::sync::Arc;
 use waynest::ObjectId;
 use waynest_protocols::server::stable::xdg_shell::xdg_popup::XdgPopup;

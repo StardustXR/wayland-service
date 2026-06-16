@@ -1,10 +1,9 @@
 use super::toplevel::Toplevel;
 use crate::{
-    BINDER_DEV, CLIENT,
+    BINDER_DEV,
     client::Message,
     panel_item_ui::PanelItemUi,
     protocols::core::{
-        keyboard::KEYMAPS,
         seat::{Seat, SeatMessage},
         surface::Surface,
     },
@@ -12,14 +11,21 @@ use crate::{
 use binderbinder::binder_object::BinderObject;
 use dashmap::DashMap;
 use gluon::Handler;
-use stardust_xr_fusion::spatial::SpatialRef;
-use stardust_xr_gluon::AbortOnDrop;
-use stardust_xr_panel_item::protocol::{
-    ChildState, Geometry, KeymapId, PanelItem, PanelItemAcceptor, PanelItemHandler, PanelShell,
-    ScrollSource, SurfaceId, SurfaceUpdateTarget,
+use stardust_xr_fusion::{
+    keymap::Keymap,
+    spatial::SpatialRef,
+    types::{Size2, Timestamp, Vec2F},
+};
+use stardust_xr_panel_item::{
+    panel_item::{
+        ChildState, Geometry, ModifierState, PanelItem, PanelItemHandler, PanelShell, ScrollSource,
+        SurfaceId, SurfaceUpdateTarget,
+    },
+    panel_item_acceptor::PanelItemAcceptor,
 };
 use std::sync::Weak;
 use std::sync::{Arc, OnceLock};
+use tokio::task::AbortHandle;
 use tracing;
 
 #[derive(Handler)]
@@ -29,7 +35,14 @@ pub struct XdgBackend {
     panel_shell: OnceLock<PanelShell>,
     output_spatial: OnceLock<SpatialRef>,
     pub children: DashMap<u64, (Weak<Surface>, ChildState)>,
-    _task: OnceLock<AbortOnDrop>,
+    task: OnceLock<AbortHandle>,
+}
+impl Drop for XdgBackend {
+    fn drop(&mut self) {
+        if let Some(task) = self.task.get() {
+            task.abort();
+        }
+    }
 }
 
 impl std::fmt::Debug for XdgBackend {
@@ -57,7 +70,7 @@ impl XdgBackend {
             children: DashMap::new(),
             panel_shell: OnceLock::from(panel_shell),
             output_spatial: OnceLock::from(output_spatial_ref),
-            _task: OnceLock::new(),
+            task: OnceLock::new(),
         };
         backend.reset_input();
         backend
@@ -74,14 +87,11 @@ impl XdgBackend {
             children: DashMap::new(),
             panel_shell: OnceLock::new(),
             output_spatial: OnceLock::new(),
-            _task: OnceLock::new(),
+            task: OnceLock::new(),
         };
         let obj = Arc::new(dev.register_object(item_backend));
-        let (shell, spatial_ref_id) = item_acceptor
+        let (shell, spatial_ref) = item_acceptor
             .accept(PanelItem::from_handler(&*obj))
-            .await
-            .unwrap();
-        let spatial_ref = SpatialRef::import(CLIENT.wait(), spatial_ref_id.id)
             .await
             .unwrap();
         let drop_future = obj.strong_refs_hit_zero();
@@ -96,7 +106,8 @@ impl XdgBackend {
                         obj.output_spatial.get().unwrap().clone(),
                         &obj.seat.upgrade().unwrap(),
                         &obj.toplevel(),
-                    );
+                    )
+                    .await;
                     obj.toplevel().switch_panel_shell(shell).await;
                 }
             }
@@ -177,16 +188,13 @@ impl XdgBackend {
     }
 }
 impl PanelItemHandler for XdgBackend {
-    async fn register_xkb_keymap(&self, _ctx: gluon::Context, xkb_keymap: String) -> KeymapId {
-        KEYMAPS.register(xkb_keymap).await
-    }
-
     async fn pointer_motion(
         &self,
         _ctx: gluon::Context,
         surface: SurfaceId,
-        delta: Option<stardust_xr_panel_item::protocol::Vec2>,
-        position: stardust_xr_panel_item::protocol::Vec2,
+        delta: Option<Vec2F>,
+        position: Vec2F,
+        timestamp: Option<Timestamp>,
     ) {
         let Some(surface) = self.surface_from_id(&surface) else {
             return;
@@ -208,6 +216,7 @@ impl PanelItemHandler for XdgBackend {
         surface: SurfaceId,
         button: u32,
         pressed: bool,
+        timestamp: Option<Timestamp>,
     ) {
         if let Some(surface) = self.surface_from_id(&surface) {
             let _ = self
@@ -226,8 +235,9 @@ impl PanelItemHandler for XdgBackend {
         &self,
         _ctx: gluon::Context,
         surface: SurfaceId,
-        delta: stardust_xr_panel_item::protocol::Vec2,
+        delta: Vec2F,
         source: ScrollSource,
+        timestamp: Option<Timestamp>,
     ) {
         if let Some(surface) = self.surface_from_id(&surface) {
             let _ = self
@@ -246,8 +256,9 @@ impl PanelItemHandler for XdgBackend {
         &self,
         _ctx: gluon::Context,
         surface: SurfaceId,
-        delta: stardust_xr_panel_item::protocol::Vec2,
+        delta: Vec2F,
         source: ScrollSource,
+        timestamp: Option<Timestamp>,
     ) {
         if let Some(surface) = self.surface_from_id(&surface) {
             let _ = self
@@ -262,7 +273,12 @@ impl PanelItemHandler for XdgBackend {
         }
     }
 
-    async fn pointer_scroll_stop(&self, _ctx: gluon::Context, surface: SurfaceId) {
+    async fn pointer_scroll_stop(
+        &self,
+        _ctx: gluon::Context,
+        surface: SurfaceId,
+        timestamp: Option<Timestamp>,
+    ) {
         if let Some(surface) = self.surface_from_id(&surface) {
             let _ = self
                 .toplevel()
@@ -276,9 +292,11 @@ impl PanelItemHandler for XdgBackend {
         &self,
         _ctx: gluon::Context,
         surface: SurfaceId,
-        keymap: KeymapId,
         key: u32,
         pressed: bool,
+        modifier_state: ModifierState,
+        keymap: Keymap,
+        timestamp: Option<Timestamp>,
     ) {
         tracing::debug!(
             "Backend: Keyboard key {} {}",
@@ -292,9 +310,10 @@ impl PanelItemHandler for XdgBackend {
                 .message_sink
                 .send(Message::Seat(SeatMessage::KeyboardKey {
                     surface,
-                    keymap_id: keymap.id,
+                    keymap,
                     key,
                     pressed,
+                    modifier_state,
                 }));
         }
     }
@@ -304,7 +323,8 @@ impl PanelItemHandler for XdgBackend {
         _ctx: gluon::Context,
         surface: SurfaceId,
         id: u32,
-        position: stardust_xr_panel_item::protocol::Vec2,
+        position: Vec2F,
+        timestamp: Option<Timestamp>,
     ) {
         tracing::debug!(
             "Backend: Touch down {} at ({}, {})",
@@ -329,7 +349,8 @@ impl PanelItemHandler for XdgBackend {
         &self,
         _ctx: gluon::Context,
         id: u32,
-        position: stardust_xr_panel_item::protocol::Vec2,
+        position: Vec2F,
+        timestamp: Option<Timestamp>,
     ) {
         tracing::debug!(
             "Backend: Touch move {} to ({}, {})",
@@ -347,7 +368,7 @@ impl PanelItemHandler for XdgBackend {
             }));
     }
 
-    async fn touch_up(&self, _ctx: gluon::Context, id: u32) {
+    async fn touch_up(&self, _ctx: gluon::Context, id: u32, timestamp: Option<Timestamp>) {
         tracing::debug!("Backend: Touch up {}", id);
         let toplevel = self.toplevel();
         let _ = toplevel
@@ -375,11 +396,7 @@ impl PanelItemHandler for XdgBackend {
             });
     }
 
-    async fn request_toplevel_resize(
-        &self,
-        _ctx: gluon::Context,
-        new_size: stardust_xr_panel_item::protocol::UVec2,
-    ) {
+    async fn request_toplevel_resize(&self, _ctx: gluon::Context, new_size: Size2) {
         let _ = self
             .toplevel()
             .wl_surface()

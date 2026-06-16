@@ -4,7 +4,8 @@ use crate::protocols::core::{
     keyboard::Keyboard, pointer::Pointer, surface::Surface, touch::Touch,
 };
 use mint::Vector2;
-use stardust_xr_panel_item::protocol::ScrollSource;
+use stardust_xr_fusion::keymap::Keymap;
+use stardust_xr_panel_item::panel_item::{ModifierState, ScrollSource};
 use std::sync::Arc;
 use std::sync::OnceLock;
 use waynest::ObjectId;
@@ -38,9 +39,10 @@ pub enum SeatMessage {
     },
     KeyboardKey {
         surface: Arc<Surface>,
-        keymap_id: u64,
+        keymap: Keymap,
         key: u32,
         pressed: bool,
+        modifier_state: ModifierState,
     },
     TouchDown {
         surface: Arc<Surface>,
@@ -149,13 +151,14 @@ impl Seat {
             }
             SeatMessage::KeyboardKey {
                 surface,
-                keymap_id,
+                keymap,
                 key,
                 pressed,
+                modifier_state,
             } => {
                 if let Some(keyboard) = self.keyboard.get() {
                     keyboard
-                        .handle_keyboard_key(client, surface, keymap_id, key - 8, pressed)
+                        .handle_keyboard_key(client, surface, keymap, key, pressed,modifier_state)
                         .await?;
                 }
             }

@@ -3,10 +3,7 @@ use crate::{CLIENT, vulkan_ctx::VK};
 use super::buffer_params::BufferParams;
 use drm_fourcc::DrmFourcc;
 use mint::Vector2;
-use stardust_xr_fusion::{
-    drawable::{self, DmatexPlane, DmatexSize},
-    node::NodeError,
-};
+use stardust_xr_fusion::dmatex::{DmatexExt, DmatexFormat, DmatexPlane, DmatexRef, DmatexSize};
 use std::{
     os::fd::OwnedFd,
     sync::{
@@ -23,11 +20,9 @@ use waynest_protocols::server::stable::linux_dmabuf_v1::zwp_linux_buffer_params_
 pub struct DmabufBacking {
     size: Vector2<u32>,
     format: DrmFourcc,
-    _modifier: u64,
     timeline: Arc<TimelineSyncObj>,
     fds: Arc<Vec<AsyncFd<OwnedFd>>>,
-    dmatex_id: u64,
-    dmatex_uid: u64,
+    dmatex: DmatexRef,
     next_acquire_point: AtomicU64,
 }
 
@@ -41,50 +36,44 @@ impl DmabufBacking {
         tracing::info!("Creating new DmabufBacking");
         let client = CLIENT.wait();
         let vk = VK.wait();
-        let dmatex_id = client.generate_id();
         let timeline = Arc::new(
-            TimelineSyncObj::create(vk.render_dev.drm_node())
+            TimelineSyncObj::new(vk.render_dev.drm_node())
                 .map_err(DmatexImportError::TimelineCreationError)?,
         );
-        drawable::import_dmatex(
-            client,
-            dmatex_id,
-            DmatexSize::Dim2D(size),
-            format as u32,
-            modifier,
-            true,
-            None,
-            &planes,
-            timeline
-                .export()
-                .map_err(DmatexImportError::TimelineExportError)?
-                .into(),
-        )
-        .unwrap();
-        let dmatex_uid = drawable::export_dmatex_uid(client, dmatex_id)
-            .await
-            .map_err(DmatexImportError::DmatexExportError)?;
         let fds = planes
             .iter()
             .map(|v| {
                 v.dmabuf_fd
-                    .0
                     .try_clone()
                     .map(|fd| AsyncFd::new(fd).unwrap())
                     .map_err(DmatexImportError::DmabufFdCloneError)
             })
             .collect::<Result<Vec<_>, _>>()?
             .into();
+        let dmatex = DmatexRef::import(
+            client,
+            DmatexSize::Size2D { size },
+            DmatexFormat {
+                drm_fourcc: format as u32,
+                drm_modifier: modifier,
+                is_srgb: true,
+            },
+            1,
+            planes,
+            timeline
+                .export()
+                .map_err(DmatexImportError::TimelineExportError)?,
+        )
+        .await
+        .map_err(DmatexImportError::DmatexImportError)?;
 
         Ok(DmabufBacking {
             size,
             format,
-            dmatex_uid,
             timeline,
-            dmatex_id,
-            _modifier: modifier,
-            next_acquire_point: AtomicU64::new(0),
             fds,
+            dmatex,
+            next_acquire_point: AtomicU64::new(0),
         })
     }
     #[tracing::instrument(level = "debug", skip_all)]
@@ -101,7 +90,7 @@ impl DmabufBacking {
         Self::new(planes, modifier, size, format).await
     }
 
-    pub fn update(&self) -> (u64, u64, u64) {
+    pub fn update(&self) -> (DmatexRef, u64, u64) {
         let acquire = self.next_acquire_point.fetch_add(1, Ordering::Relaxed);
         let release = self.next_acquire_point.fetch_add(1, Ordering::Relaxed);
         tokio::spawn({
@@ -116,7 +105,7 @@ impl DmabufBacking {
                 }
             }
         });
-        (self.dmatex_uid, acquire, release)
+        (self.dmatex.clone(), acquire, release)
     }
 
     pub fn timeline(&self) -> Arc<TimelineSyncObj> {
@@ -149,11 +138,6 @@ impl DmabufBacking {
         [self.size.x as usize, self.size.y as usize].into()
     }
 }
-impl Drop for DmabufBacking {
-    fn drop(&mut self) {
-        _ = drawable::unregister_dmatex(CLIENT.wait(), self.dmatex_id);
-    }
-}
 #[derive(Debug, thiserror::Error)]
 pub enum DmatexImportError {
     #[error("Format modifier combination not found")]
@@ -161,9 +145,9 @@ pub enum DmatexImportError {
     #[error("No modifier (no planes)")]
     NoModifier,
     #[error("Failed to enumerate Server Dmatex formats: {0}")]
-    FailedToEnumerateServerFormats(NodeError),
-    #[error("Failed to export Dmatex: {0}")]
-    DmatexExportError(NodeError),
+    FailedToEnumerateServerFormats(stardust_xr_fusion::Error),
+    #[error("Failed to import Dmatex into server: {0}")]
+    DmatexImportError(stardust_xr_fusion::Error),
     #[error("Failed to create TimelineSyncObj: {0}")]
     TimelineCreationError(rustix::io::Errno),
     #[error("Failed to export TimelineSyncObj: {0}")]

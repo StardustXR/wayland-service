@@ -2,7 +2,7 @@ use super::surface::SurfaceRole;
 use crate::protocols::{core::surface::Surface, relative_pointer::RelativePointer};
 use crate::{client::Client, error::WaylandResult};
 use mint::Vector2;
-use stardust_xr_panel_item::protocol::{Geometry, ScrollSource};
+use stardust_xr_panel_item::panel_item::{Geometry, ScrollSource};
 use std::sync::Arc;
 use std::sync::Weak;
 use tokio::sync::{Mutex, RwLock};
@@ -358,7 +358,7 @@ impl WlPointer for Pointer {
             .await?;
         _ = surface
             .surface_id
-            .set(stardust_xr_panel_item::protocol::SurfaceUpdateTarget::Cursor);
+            .set(stardust_xr_panel_item::panel_item::SurfaceUpdateTarget::Cursor);
         if let Some(focused_surface) = self.focused_surface.lock().await.upgrade() {
             *surface.toplevel.write() = focused_surface.toplevel.read().clone();
         }

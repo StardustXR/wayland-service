@@ -4,8 +4,7 @@ use super::shm_pool::ShmPool;
 use mint::Vector2;
 use stardust_xr_cme::dmatex::Dmatex;
 use stardust_xr_cme::format::DmatexFormat;
-use stardust_xr_fusion::drawable::{DmatexSize, export_dmatex_uid};
-use stardust_xr_fusion::node::NodeError;
+use stardust_xr_fusion::dmatex::{DmatexRef, DmatexSize};
 use std::os::fd::AsFd;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock};
@@ -26,6 +25,7 @@ use vulkano::sync::semaphore::{
 };
 use waynest_protocols::server::core::wayland::wl_shm::Format;
 
+#[derive(Debug)]
 /// Parameters for a shared memory buffer
 pub struct ShmBufferBacking {
     pool: Arc<ShmPool>,
@@ -34,24 +34,9 @@ pub struct ShmBufferBacking {
     size: Vector2<u64>,
     wl_format: Format,
     dmatex: Arc<Dmatex>,
-    dmatex_uid: u64,
     staging_buffer: Subbuffer<[u8]>,
     next_acquire_point: AtomicU64,
     timeline_copy: Arc<TimelineSyncObj>,
-}
-
-impl std::fmt::Debug for ShmBufferBacking {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ShmBufferBacking")
-            .field("pool", &self.pool)
-            .field("offset", &self.offset)
-            .field("stride", &self.stride)
-            .field("size", &self.size)
-            .field("wl_format", &self.wl_format)
-            .field("dmatex_uid", &self.dmatex_uid)
-            .field("staging_buffer", &self.staging_buffer)
-            .finish()
-    }
 }
 
 impl ShmBufferBacking {
@@ -75,15 +60,20 @@ impl ShmBufferBacking {
             .get(&texture_format)
             .cloned()
             .ok_or(ShmBackingCreationError::FormatNotSupportedByDmatex)?;
-        let dmatex = Arc::new(Dmatex::new(
-            client,
-            &vk.dev,
-            &vk.render_dev,
-            DmatexSize::Dim2D([size.x as u32, size.y as u32].into()),
-            &format,
-            None,
-            ImageUsage::TRANSFER_DST,
-        ));
+        let dmatex = Arc::new(
+            Dmatex::new(
+                client,
+                &vk.dev,
+                &vk.render_dev,
+                DmatexSize::Size2D {
+                    size: [size.x as u32, size.y as u32].into(),
+                },
+                &format,
+                None,
+                ImageUsage::TRANSFER_DST,
+            )
+            .await,
+        );
 
         let staging_buffer = Buffer::new_slice::<u8>(
             vk.mem_alloc.clone(),
@@ -100,7 +90,6 @@ impl ShmBufferBacking {
         )
         // To lazy to properly bubble up the error rn
         .unwrap();
-        let dmatex_uid = export_dmatex_uid(client, dmatex.dmatex_id).await.unwrap();
         let timeline_copy = Arc::new(
             TimelineSyncObj::import(
                 vk.render_dev.drm_node(),
@@ -116,13 +105,12 @@ impl ShmBufferBacking {
             wl_format,
             dmatex,
             staging_buffer,
-            dmatex_uid,
             timeline_copy,
             next_acquire_point: AtomicU64::new(0),
         })
     }
 
-    pub fn update(&self) -> (u64, u64, u64) {
+    pub fn update(&self) -> (DmatexRef, u64, u64) {
         let acquire = self.next_acquire_point.fetch_add(1, Ordering::Relaxed);
         let release = self.next_acquire_point.fetch_add(1, Ordering::Relaxed);
         // TODO: move this to a blocking thread
@@ -147,7 +135,7 @@ impl ShmBufferBacking {
             })
             .unwrap();
         // self.staging_buffer.
-        (self.dmatex_uid, acquire, release)
+        (self.dmatex.dmatex.clone(), acquire, release)
     }
 
     pub fn timeline(&self) -> Arc<TimelineSyncObj> {
@@ -172,7 +160,7 @@ pub enum ShmBackingCreationError {
     #[error("Format not supported")]
     UnsupportedFormat,
     #[error("Dmatex format enumeration failed: {0}")]
-    DmatexFormatEnumerationFailed(NodeError),
+    DmatexFormatEnumerationFailed(stardust_xr_fusion::Error),
     #[error("Format not supported by Dmatex")]
     FormatNotSupportedByDmatex,
 }

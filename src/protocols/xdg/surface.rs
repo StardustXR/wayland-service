@@ -8,10 +8,9 @@ use crate::{
 
 use super::{popup::Popup, positioner::Positioner, toplevel::MappedInner};
 use mint::Vector2;
-use stardust_xr_fusion::spatial::{Spatial, Transform};
-use stardust_xr_panel_item::protocol::{ChildState, Rect, SurfaceId, SurfaceUpdateTarget};
+use stardust_xr_fusion::spatial::{Spatial, SpatialExt as _, Transform};
+use stardust_xr_panel_item::panel_item::{ChildState, Rect, SurfaceId, SurfaceUpdateTarget};
 use std::sync::Arc;
-use tracing::info;
 use waynest::ObjectId;
 use waynest_protocols::server::stable::xdg_shell::xdg_popup::XdgPopup;
 pub use waynest_protocols::server::stable::xdg_shell::xdg_surface::*;
@@ -96,18 +95,26 @@ impl XdgSurface for Surface {
                 first_commit = false;
             }
 
-            let mut mapped_lock = toplevel.mapped.lock();
+            let mapped_lock = toplevel.mapped.lock();
             if mapped_lock.is_none()
                 && configured.load(std::sync::atomic::Ordering::Relaxed)
                 && surface.currently_has_valid_buffer()
             {
-                let spatial_ref = Spatial::create(CLIENT.wait().get_root(), Transform::identity())
-                    .unwrap()
-                    .as_spatial_ref();
-                let mapped_inner =
-                    MappedInner::create(&seat.upgrade().unwrap(), &toplevel, spatial_ref);
-                // *surface.panel_item.lock() = Arc::downgrade(&mapped_inner.panel_item);
-                mapped_lock.replace(mapped_inner);
+                drop(mapped_lock);
+                let client = CLIENT.wait();
+                let seat = seat.clone();
+                let toplevel = toplevel.clone();
+                tokio::spawn(async move {
+                    // TODO: use apps startup token here
+                    let (_, spatial_ref) = Spatial::new(client, client.root(), Transform::IDENTITY)
+                        .await
+                        .unwrap();
+                    let mapped_inner =
+                        MappedInner::create(&seat.upgrade().unwrap(), &toplevel, spatial_ref).await;
+                    let mut mapped_lock = toplevel.mapped.lock();
+                    // *surface.panel_item.lock() = Arc::downgrade(&mapped_inner.panel_item);
+                    mapped_lock.replace(mapped_inner);
+                });
                 return false;
             }
             drop(mapped_lock);

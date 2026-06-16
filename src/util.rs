@@ -4,13 +4,12 @@ pub mod registry;
 
 use parking_lot::Mutex;
 use std::{
-    fmt::Debug,
-    io,
-    sync::{
+    fmt::Debug, io, ops::Deref, sync::{
         Arc, Weak,
         atomic::{AtomicU32, Ordering},
-    },
+    }
 };
+use tokio::task::{AbortHandle, JoinHandle};
 use tracing::info;
 use waynest::ObjectId;
 use waynest_protocols::server::core::wayland::wl_display::WlDisplay;
@@ -22,6 +21,31 @@ use crate::{
     error::{WaylandError, WaylandResult},
     protocols::core::surface::Surface,
 };
+
+#[derive(Debug)]
+pub struct AbortOnDrop(AbortHandle);
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+impl From<AbortHandle> for AbortOnDrop {
+    fn from(value: AbortHandle) -> Self {
+        Self(value)
+    }
+}
+impl<T> From<JoinHandle<T>> for AbortOnDrop {
+    fn from(value: JoinHandle<T>) -> Self {
+        Self(value.abort_handle())
+    }
+}
+impl Deref for AbortOnDrop {
+    type Target = AbortHandle;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
 
 impl Client {
     pub fn message_sink(&self) -> MessageSink {
