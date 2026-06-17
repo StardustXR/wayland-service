@@ -4,6 +4,7 @@ use crate::{
     display::Display,
     error::{WaylandError, WaylandResult},
     protocols::{core::surface::SurfaceRole, xdg::toplevel::Toplevel},
+    util::get_env,
 };
 
 use super::{popup::Popup, positioner::Positioner, toplevel::MappedInner};
@@ -80,7 +81,7 @@ impl XdgSurface for Surface {
         let toplevel_weak = Arc::downgrade(&toplevel);
         let display = client.get::<Display>(ObjectId::DISPLAY).unwrap();
         let seat = Arc::downgrade(display.seat.get().unwrap());
-        let pid = display.pid;
+        let pid = dbg!(display.pid);
         let configured = self.configured.clone();
         let mut first_commit = true;
         let message_tx = client.message_sink().clone();
@@ -104,11 +105,21 @@ impl XdgSurface for Surface {
                 let client = CLIENT.wait();
                 let seat = seat.clone();
                 let toplevel = toplevel.clone();
+                let spatial_token = pid
+                    .and_then(|pid| get_env(pid).ok())
+                    .and_then(|mut v| v.remove("STARDUST_STARTUP_TOKEN"));
                 tokio::spawn(async move {
-                    // TODO: use apps startup token here
-                    let (_, spatial_ref) = Spatial::new(client, client.root(), Transform::IDENTITY)
-                        .await
-                        .unwrap();
+                    let spatial_ref = if let Some(token) = dbg!(spatial_token)
+                        && let Some(spatial_ref) = client.startup_token_spatial(dbg!(token)).await
+                    {
+                        spatial_ref
+                    } else {
+                        let (_, spatial_ref) =
+                            Spatial::new(client, client.root(), Transform::IDENTITY)
+                                .await
+                                .unwrap();
+                        spatial_ref
+                    };
                     let mapped_inner =
                         MappedInner::create(&seat.upgrade().unwrap(), &toplevel, spatial_ref).await;
                     let mut mapped_lock = toplevel.mapped.lock();

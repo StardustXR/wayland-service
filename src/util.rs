@@ -3,11 +3,16 @@
 pub mod registry;
 
 use parking_lot::Mutex;
+use rustix::process::RawPid;
 use std::{
-    fmt::Debug, io, ops::Deref, sync::{
+    collections::HashMap,
+    fmt::Debug,
+    fs, io,
+    ops::Deref,
+    sync::{
         Arc, Weak,
         atomic::{AtomicU32, Ordering},
-    }
+    },
 };
 use tokio::task::{AbortHandle, JoinHandle};
 use tracing::info;
@@ -21,6 +26,15 @@ use crate::{
     error::{WaylandError, WaylandResult},
     protocols::core::surface::Surface,
 };
+
+pub fn get_env(pid: RawPid) -> Result<HashMap<String, String>, std::io::Error> {
+    let env = fs::read_to_string(format!("/proc/{pid}/environ"))?;
+    Ok(HashMap::from_iter(
+        env.split('\0')
+            .filter_map(|var| var.split_once('='))
+            .map(|(k, v)| (k.to_string(), v.to_string())),
+    ))
+}
 
 #[derive(Debug)]
 pub struct AbortOnDrop(AbortHandle);

@@ -42,8 +42,6 @@ async fn main() {
         .with_ansi(true)
         .with_line_number(true)
         .init();
-    let v = ProtocolError::from(std::io::Error::last_os_error());
-    let v = <ProtocolError as From<std::io::Error>>::from(std::io::Error::last_os_error());
     let binder_dev = PionBinderDevice::default();
     // TODO: maybe allow reconnecting to different server? or multi server support?
     let (client, _) = Client::manual_connect(&binder_dev, &[&project_local_resources!("res")])
