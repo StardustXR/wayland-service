@@ -1,5 +1,5 @@
 use crate::{
-    CLIENT,
+    CLIENT, PROJECT_DIRS,
     client::{Client, Message},
     display::Display,
     error::{WaylandError, WaylandResult},
@@ -109,7 +109,23 @@ impl XdgSurface for Surface {
                     .and_then(|pid| get_env(pid).ok())
                     .and_then(|mut v| v.remove("STARDUST_STARTUP_TOKEN"));
                 tokio::spawn(async move {
-                    let spatial_ref = if let Some(token) = dbg!(spatial_token)
+                    if let path = PROJECT_DIRS.config_dir().join("default_panel_shell")
+                        && path.exists()
+                        && path.to_str().is_some()
+                    {
+                        let mut vars = Vec::with_capacity(3);
+                        if let Some(token) = spatial_token.as_ref() {
+                            vars.push(("STARDUST_STARTUP_TOKEN".into(), token.clone()));
+                        }
+                        if let Some(app_id) = toplevel.app_id() {
+                            vars.push(("SDXR_WL_APP_ID".into(), app_id));
+                        }
+                        if let Some(title) = toplevel.title() {
+                            vars.push(("SDXR_WL_TITLE".into(), title));
+                        }
+                        protostar_launcher::launch(path.to_str().unwrap().into(), vars).await;
+                    }
+                    let spatial_ref = if let Some(token) = spatial_token
                         && let Some(spatial_ref) = client.startup_token_spatial(dbg!(token)).await
                     {
                         spatial_ref

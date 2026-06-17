@@ -72,3 +72,4 @@ vulkano.workspace = true
 rand = "0.10.0"
 rustc-hash = "2.1.1"
 timeline_syncobj = { version = "0.2.0", features = ["tokio"] }
+protostar-launcher = { git = "https://github.com/StardustXR/protostar" }

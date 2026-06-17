@@ -2,9 +2,10 @@ use std::{
     env::args_os,
     fs::OpenOptions,
     path::PathBuf,
-    sync::{Arc, OnceLock},
+    sync::{Arc, LazyLock, OnceLock},
 };
 
+use directories::ProjectDirs;
 use pion_binder::PionBinderDevice;
 use stardust_xr_fusion::{
     client::{Client, DefaultHandler},
@@ -31,6 +32,9 @@ pub mod vulkan_ctx;
 pub static CLIENT: OnceLock<Arc<Client<DefaultHandler>>> = OnceLock::new();
 pub static BINDER_DEV: OnceLock<PionBinderDevice> = OnceLock::new();
 pub static KEYMAP_STORE: OnceLock<KeymapStore> = OnceLock::new();
+pub static PROJECT_DIRS: LazyLock<ProjectDirs> = LazyLock::new(|| {
+    ProjectDirs::from("", "", "stardust-wayland-service").expect("failed to init project dirs")
+});
 
 #[tokio::main]
 async fn main() {
