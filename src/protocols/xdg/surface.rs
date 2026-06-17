@@ -113,7 +113,8 @@ impl XdgSurface for Surface {
                         && path.exists()
                         && path.to_str().is_some()
                     {
-                        let mut vars = Vec::with_capacity(3);
+                        let mut vars = Vec::with_capacity(4);
+                        vars.push(("SDXR_WL_DEFAULT_PANEL_SHELL".into(), "1".into()));
                         if let Some(token) = spatial_token.as_ref() {
                             vars.push(("STARDUST_STARTUP_TOKEN".into(), token.clone()));
                         }
