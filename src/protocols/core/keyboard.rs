@@ -2,6 +2,7 @@ use dashmap::{DashMap, DashSet};
 use memfd::MemfdOptions;
 use parking_lot::Mutex;
 use stardust_xr_fusion::keymap::Keymap;
+use stardust_xr_panel_item::panel_item::ModifierState;
 use std::{
     io::Write,
     os::{
@@ -69,7 +70,7 @@ impl Keyboard {
         keymap: Keymap,
         key: u32,
         pressed: bool,
-        modifier_state: stardust_xr_panel_item::panel_item::ModifierState,
+        modifier_state: ModifierState,
     ) -> WaylandResult<()> {
         if self
             .current_keymap_id
@@ -165,8 +166,7 @@ impl Keyboard {
             modifier_state.depressed,
             modifier_state.latched,
             modifier_state.locked,
-            // TODO: properly forward group
-            0,
+            modifier_state.layout_group,
         )
         .await?;
 
