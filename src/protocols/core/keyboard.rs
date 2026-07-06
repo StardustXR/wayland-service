@@ -1,6 +1,5 @@
 use dashmap::{DashMap, DashSet};
 use memfd::MemfdOptions;
-use parking_lot::Mutex;
 use stardust_xr_fusion::keymap::Keymap;
 use stardust_xr_panel_item::panel_item::ModifierState;
 use std::{
@@ -11,7 +10,7 @@ use std::{
     },
     sync::{Arc, Weak},
 };
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use waynest::ObjectId;
 pub use waynest_protocols::server::core::wayland::wl_keyboard::*;
 
@@ -97,7 +96,7 @@ impl Keyboard {
         // println!("pressed keys: {:?}", &*pressed_keys);
 
         // FOCUS UPDATES
-        let mut focused = self.focused_surface.lock();
+        let mut focused = self.focused_surface.lock().await;
 
         let refocus = focused.as_ptr() != Arc::as_ptr(&surface);
         // If we're entering a new surface
