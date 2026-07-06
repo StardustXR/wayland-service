@@ -7,7 +7,7 @@ use crate::{
 use drm_fourcc::DrmFourcc;
 use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
-use stardust_xr_fusion::dmatex::DmatexPlane;
+use stardust_xr_fusion::dmatex::{DisjointDmatexPlane, DmatexPlane};
 use std::{os::fd::OwnedFd, sync::OnceLock};
 use waynest::ObjectId;
 use waynest_protocols::server::stable::linux_dmabuf_v1::zwp_linux_buffer_params_v1::{
@@ -24,7 +24,7 @@ use waynest_server::Client as _;
 #[waynest(error = crate::error::WaylandError, connection = crate::client::Client)]
 pub struct BufferParams {
     pub id: ObjectId,
-    pub(super) planes: Mutex<FxHashMap<u32, DmatexPlane>>,
+    pub(super) planes: Mutex<FxHashMap<u32, DisjointDmatexPlane>>,
     pub(super) modifier: OnceLock<u64>,
 }
 
@@ -85,12 +85,14 @@ impl ZwpLinuxBufferParamsV1 for BufferParams {
         }
 
         // Create plane with the provided parameters
-        let plane = DmatexPlane {
+        let plane = DisjointDmatexPlane {
             dmabuf_fd: fd,
-            offset: offset as u64,
-            row_size: stride as u64,
-            array_element_size: 0,
-            depth_slice_size: 0,
+            plane: DmatexPlane {
+                offset: offset as u64,
+                row_size: stride as u64,
+                array_element_size: 0,
+                depth_slice_size: 0,
+            },
         };
 
         let modifier = ((modifier_hi as u64) << 32) | (modifier_lo as u64);

@@ -4,7 +4,7 @@ use super::shm_pool::ShmPool;
 use mint::Vector2;
 use stardust_xr_cme::dmatex::Dmatex;
 use stardust_xr_cme::format::DmatexFormat;
-use stardust_xr_fusion::dmatex::{DmatexRef, DmatexSize};
+use stardust_xr_fusion::dmatex::{AlphaMode, DmatexRef, DmatexSize};
 use std::os::fd::AsFd;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock};
@@ -70,6 +70,7 @@ impl ShmBufferBacking {
                 },
                 &format,
                 None,
+                AlphaMode::PremultipliedElectrical,
                 ImageUsage::TRANSFER_DST,
             )
             .await,

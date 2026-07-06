@@ -1531,7 +1531,7 @@ dependencies = [
 [[package]]
 name = "stardust-xr-cme"
 version = "0.51.0"
-source = "git+https://github.com/StardustXR/cme.git?branch=binder-core#9a7d6e8569dd31a0e93ea972974b156133d0e92f"
+source = "git+https://github.com/StardustXR/cme.git?branch=binder-core#59565e3e72b9033780635774fdd7b3d4c5cb513d"
 dependencies = [
  "drm-fourcc",
  "rustix",
@@ -1545,12 +1545,13 @@ dependencies = [
 [[package]]
 name = "stardust-xr-fusion"
 version = "0.51.1"
-source = "git+https://github.com/StardustXR/core.git?branch=binder#bdf8ce105f5f1c0404ab375f93fd9c720a078ea7"
+source = "git+https://github.com/StardustXR/core.git?branch=binder#7fa65ccdeeea7c901d36947ab0ef94f373a57373"
 dependencies = [
  "glam 0.30.10",
  "gluon",
  "parking_lot",
  "pion-binder",
+ "rustix",
  "stardust-xr-protocol",
  "thiserror",
  "tokio",
@@ -1611,7 +1612,7 @@ dependencies = [
 [[package]]
 name = "stardust-xr-protocol"
 version = "0.51.1"
-source = "git+https://github.com/StardustXR/core.git?branch=binder#bdf8ce105f5f1c0404ab375f93fd9c720a078ea7"
+source = "git+https://github.com/StardustXR/core.git?branch=binder#7fa65ccdeeea7c901d36947ab0ef94f373a57373"
 dependencies = [
  "fnv",
  "glam 0.29.3",

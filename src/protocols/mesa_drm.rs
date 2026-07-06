@@ -2,7 +2,7 @@ use drm_fourcc::DrmFourcc;
 use mint::Vector2;
 use rustc_hash::FxHashSet;
 use stardust_xr_cme::format::DmatexFormat;
-use stardust_xr_fusion::dmatex::DmatexPlane;
+use stardust_xr_fusion::dmatex::{DisjointDmatexPlane, DmatexPlane};
 use std::os::fd::OwnedFd;
 use waynest::ObjectId;
 use waynest_protocols::server::mesa::drm::wl_drm::*;
@@ -122,12 +122,14 @@ impl WlDrm for MesaDrm {
             return Ok(());
         };
         let _ = DmabufBacking::new(
-            vec![DmatexPlane {
+            vec![DisjointDmatexPlane {
                 dmabuf_fd: name,
-                offset: offset0 as u64,
-                row_size: stride0 as u64,
-                array_element_size: 0,
-                depth_slice_size: 0,
+                plane: DmatexPlane {
+                    offset: offset0 as u64,
+                    row_size: stride0 as u64,
+                    array_element_size: 0,
+                    depth_slice_size: 0,
+                },
             }],
             0xFFFFFFFFFFFFFF, // because drmfourcc is so broken it doesn't actually export this, this is Invalid btw
             Vector2 {

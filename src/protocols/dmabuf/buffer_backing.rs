@@ -3,7 +3,9 @@ use crate::{CLIENT, vulkan_ctx::VK};
 use super::buffer_params::BufferParams;
 use drm_fourcc::DrmFourcc;
 use mint::Vector2;
-use stardust_xr_fusion::dmatex::{DmatexExt, DmatexFormat, DmatexPlane, DmatexRef, DmatexSize};
+use stardust_xr_fusion::dmatex::{
+    AlphaMode, DisjointDmatexPlane, DmatexExt, DmatexFormat, DmatexPlanes, DmatexRef, DmatexSize,
+};
 use std::{
     os::fd::OwnedFd,
     sync::{
@@ -28,7 +30,7 @@ pub struct DmabufBacking {
 
 impl DmabufBacking {
     pub async fn new(
-        planes: Vec<DmatexPlane>,
+        planes: Vec<DisjointDmatexPlane>,
         modifier: u64,
         size: Vector2<u32>,
         format: DrmFourcc,
@@ -40,16 +42,53 @@ impl DmabufBacking {
             TimelineSyncObj::new(vk.render_dev.drm_node())
                 .map_err(DmatexImportError::TimelineCreationError)?,
         );
-        let fds = planes
+        let mut last_dev_ino = None;
+        let mut disjoint = false;
+        for dev_ino in planes
             .iter()
-            .map(|v| {
-                v.dmabuf_fd
-                    .try_clone()
-                    .map(|fd| AsyncFd::new(fd).unwrap())
-                    .map_err(DmatexImportError::DmabufFdCloneError)
-            })
-            .collect::<Result<Vec<_>, _>>()?
-            .into();
+            .filter_map(|p| rustix::fs::fstat(&p.dmabuf_fd).ok())
+            .map(|stat| (stat.st_dev, stat.st_ino))
+        {
+            if let Some(last_dev_ino) = last_dev_ino {
+                if last_dev_ino != dev_ino {
+                    disjoint = true;
+                    break;
+                }
+            }
+            last_dev_ino = Some(dev_ino);
+        }
+        let planes = if disjoint {
+            DmatexPlanes::Disjoint { planes }
+        } else {
+            DmatexPlanes::Simple {
+                planes: planes.iter().map(|v| v.plane).collect(),
+                dmabuf_fd: planes.into_iter().next().unwrap().dmabuf_fd,
+            }
+        };
+        let fds = match &planes {
+            DmatexPlanes::Simple {
+                dmabuf_fd,
+                planes: _,
+            } => vec![
+                AsyncFd::new(
+                    dmabuf_fd
+                        .try_clone()
+                        .map_err(DmatexImportError::DmabufFdCloneError)?,
+                )
+                .unwrap(),
+            ]
+            .into(),
+            DmatexPlanes::Disjoint { planes } => planes
+                .iter()
+                .map(|v| {
+                    v.dmabuf_fd
+                        .try_clone()
+                        .map(|fd| AsyncFd::new(fd).unwrap())
+                        .map_err(DmatexImportError::DmabufFdCloneError)
+                })
+                .collect::<Result<Vec<_>, _>>()?
+                .into(),
+        };
         let dmatex = DmatexRef::import(
             client,
             DmatexSize::Size2D { size },
@@ -57,6 +96,8 @@ impl DmabufBacking {
                 drm_fourcc: format as u32,
                 drm_modifier: modifier,
                 is_srgb: true,
+                alpha_mode: AlphaMode::PremultipliedElectrical,
+                ycbcr_info: None,
             },
             1,
             planes,
