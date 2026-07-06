@@ -340,8 +340,8 @@ impl WlPointer for Pointer {
                 .set_cursor_visuals(surface.and_then(|s| client.get::<Surface>(s)).map(|s| {
                     let size = s.current_buffer_size().unwrap_or([16; 2].into());
                     Geometry {
-                        origin: Vector2::from([hotspot_x, hotspot_y]).into(),
-                        size: Vector2::from([size.x as u32, size.y as u32]).into(),
+                        origin: Vector2::from([hotspot_x, hotspot_y]),
+                        size: Vector2::from([size.x as u32, size.y as u32]),
                     }
                 }))
                 .unwrap();

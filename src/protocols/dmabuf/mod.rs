@@ -55,7 +55,7 @@ impl Dmabuf {
                     .flat_map(|fourcc| {
                         f.variants()
                             .iter()
-                            .map(move |v| (fourcc.clone(), v.modifier))
+                            .map(move |v| (fourcc, v.modifier))
                     })
             })
             .collect();

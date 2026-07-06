@@ -123,7 +123,7 @@ impl WlDrm for MesaDrm {
         };
         let _ = DmabufBacking::new(
             vec![DmatexPlane {
-                dmabuf_fd: name.into(),
+                dmabuf_fd: name,
                 offset: offset0 as u64,
                 row_size: stride0 as u64,
                 array_element_size: 0,

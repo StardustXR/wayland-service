@@ -413,7 +413,7 @@ impl Surface {
     pub(super) fn buffer_update(&self) {
         if let Some(buffer) = self.state.lock().current().buffer.as_ref() {
             let (dmatex, timeline, acquire, release) = buffer.update();
-            let release = SignalOnDrop::new(timeline, release);
+            let release = SignalOnDrop::new_dmatex(timeline, release);
             if let Some(panel_item) = self.panel_item()
                 && let Some(surface_id) = self.surface_id.get()
             {

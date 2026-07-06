@@ -201,9 +201,8 @@ impl Subsurface {
                     origin: Vector2 {
                         x: subsurface_state.position.0,
                         y: subsurface_state.position.1,
-                    }
-                    .into(),
-                    size: size.into(),
+                    },
+                    size,
                 };
                 panel_item.reposition_child(&surface, geometry);
                 panel_item.update_child_z_order(&surface, subsurface_state.z_order);
@@ -242,9 +241,8 @@ impl Subsurface {
                 origin: Vector2 {
                     x: state.current().position.0,
                     y: state.current().position.1,
-                }
-                .into(),
-                size: size.into(),
+                },
+                size,
             },
             z_order: state.current().z_order,
             input_regions: vec![Rect {

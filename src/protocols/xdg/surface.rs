@@ -109,10 +109,8 @@ impl XdgSurface for Surface {
                     .and_then(|pid| get_env(pid).ok())
                     .and_then(|mut v| v.remove("STARDUST_STARTUP_TOKEN"));
                 tokio::spawn(async move {
-                    if let path = PROJECT_DIRS.config_dir().join("default_panel_shell")
-                        && path.exists()
-                        && path.to_str().is_some()
-                    {
+                    let path = PROJECT_DIRS.config_dir().join("default_panel_shell");
+                    if path.exists() && path.to_str().is_some() {
                         let mut vars = Vec::with_capacity(4);
                         vars.push(("SDXR_WL_DEFAULT_PANEL_SHELL".into(), "1".into()));
                         if let Some(token) = spatial_token.as_ref() {
@@ -234,12 +232,12 @@ impl XdgSurface for Surface {
 
         let child_info = ChildState {
             id: *id,
-            parent: parent_id.clone(),
+            parent: parent_id,
             geometry: positioner.data().infinite_geometry(),
             z_order: 1,
             input_regions: vec![Rect {
-                origin: Vector2::from([0.0; 2]).into(),
-                size: Vector2::from([1.0; 2]).into(),
+                origin: Vector2::from([0.0; 2]),
+                size: Vector2::from([1.0; 2]),
             }],
         };
 

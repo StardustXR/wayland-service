@@ -20,7 +20,7 @@ pub struct SignalOnDrop {
     consumed: AtomicBool,
 }
 impl SignalOnDrop {
-    pub fn new(timeline: Arc<TimelineSyncObj>, point: u64) -> DmatexSubmitRelease {
+    pub fn new_dmatex(timeline: Arc<TimelineSyncObj>, point: u64) -> DmatexSubmitRelease {
         let obj = BINDER_DEV
             .wait()
             .register_object(Self {

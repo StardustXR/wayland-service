@@ -189,7 +189,7 @@ impl std::fmt::Debug for PanelItemUi {
 }
 
 impl PanelItemUi {
-    pub async fn new(
+    pub async fn create(
         at: SpatialRef,
         seat: &Arc<Seat>,
         toplevel: &Arc<Toplevel>,
@@ -253,8 +253,8 @@ impl PanelItemUi {
         .unwrap();
         let part = model.get_part("Panel").await.unwrap().unwrap();
         let query = ItemHandlerQuery::new(
-            Arc::downgrade(&toplevel),
-            Arc::downgrade(&seat),
+            Arc::downgrade(toplevel),
+            Arc::downgrade(seat),
             field_spatial_ref,
             size,
         )
@@ -312,7 +312,7 @@ impl PanelItemUi {
             grabbable.frame(&frame_info);
         }
         if self.query.replaced.load(Ordering::Relaxed) {
-            return;
+            // what were you trying to do?
         }
     }
 }

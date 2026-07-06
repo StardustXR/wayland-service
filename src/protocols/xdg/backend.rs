@@ -102,7 +102,7 @@ impl XdgBackend {
             async move {
                 drop_future.await;
                 if let Some(obj) = obj.upgrade() {
-                    let shell = PanelItemUi::new(
+                    let shell = PanelItemUi::create(
                         obj.output_spatial.get().unwrap().clone(),
                         &obj.seat.upgrade().unwrap(),
                         &obj.toplevel(),
@@ -159,7 +159,7 @@ impl XdgBackend {
         };
 
         if let Some(mut child) = self.children.get_mut(id) {
-            child.1.geometry = geometry.clone();
+            child.1.geometry = geometry;
         }
         self.panel_shell().move_child(*id, geometry).unwrap();
     }
@@ -194,7 +194,7 @@ impl PanelItemHandler for XdgBackend {
         surface: SurfaceId,
         delta: Option<Vec2F>,
         position: Vec2F,
-        timestamp: Option<Timestamp>,
+        _timestamp: Option<Timestamp>,
     ) {
         let Some(surface) = self.surface_from_id(&surface) else {
             return;
@@ -205,8 +205,8 @@ impl PanelItemHandler for XdgBackend {
             .message_sink
             .send(Message::Seat(SeatMessage::PointerMotion {
                 surface,
-                position: position.into(),
-                delta: delta.map(|v| v.into()),
+                position,
+                delta,
             }));
     }
 
@@ -216,7 +216,7 @@ impl PanelItemHandler for XdgBackend {
         surface: SurfaceId,
         button: u32,
         pressed: bool,
-        timestamp: Option<Timestamp>,
+        _timestamp: Option<Timestamp>,
     ) {
         if let Some(surface) = self.surface_from_id(&surface) {
             let _ = self
@@ -237,7 +237,7 @@ impl PanelItemHandler for XdgBackend {
         surface: SurfaceId,
         delta: Vec2F,
         source: ScrollSource,
-        timestamp: Option<Timestamp>,
+        _timestamp: Option<Timestamp>,
     ) {
         if let Some(surface) = self.surface_from_id(&surface) {
             let _ = self
@@ -246,7 +246,7 @@ impl PanelItemHandler for XdgBackend {
                 .message_sink
                 .send(Message::Seat(SeatMessage::PointerScrollDiscrete {
                     surface,
-                    delta: delta.into(),
+                    delta,
                     source,
                 }));
         }
@@ -258,7 +258,7 @@ impl PanelItemHandler for XdgBackend {
         surface: SurfaceId,
         delta: Vec2F,
         source: ScrollSource,
-        timestamp: Option<Timestamp>,
+        _timestamp: Option<Timestamp>,
     ) {
         if let Some(surface) = self.surface_from_id(&surface) {
             let _ = self
@@ -267,7 +267,7 @@ impl PanelItemHandler for XdgBackend {
                 .message_sink
                 .send(Message::Seat(SeatMessage::PointerScrollDiscrete {
                     surface,
-                    delta: delta.into(),
+                    delta,
                     source,
                 }));
         }
@@ -277,7 +277,7 @@ impl PanelItemHandler for XdgBackend {
         &self,
         _ctx: gluon::Context,
         surface: SurfaceId,
-        timestamp: Option<Timestamp>,
+        _timestamp: Option<Timestamp>,
     ) {
         if let Some(surface) = self.surface_from_id(&surface) {
             let _ = self
@@ -296,7 +296,7 @@ impl PanelItemHandler for XdgBackend {
         pressed: bool,
         modifier_state: ModifierState,
         keymap: Keymap,
-        timestamp: Option<Timestamp>,
+        _timestamp: Option<Timestamp>,
     ) {
         tracing::debug!(
             "Backend: Keyboard key {} {}",
@@ -324,7 +324,7 @@ impl PanelItemHandler for XdgBackend {
         surface: SurfaceId,
         id: u32,
         position: Vec2F,
-        timestamp: Option<Timestamp>,
+        _timestamp: Option<Timestamp>,
     ) {
         tracing::debug!(
             "Backend: Touch down {} at ({}, {})",
@@ -340,7 +340,7 @@ impl PanelItemHandler for XdgBackend {
                 .send(Message::Seat(SeatMessage::TouchDown {
                     surface,
                     id,
-                    position: position.into(),
+                    position,
                 }));
         }
     }
@@ -350,7 +350,7 @@ impl PanelItemHandler for XdgBackend {
         _ctx: gluon::Context,
         id: u32,
         position: Vec2F,
-        timestamp: Option<Timestamp>,
+        _timestamp: Option<Timestamp>,
     ) {
         tracing::debug!(
             "Backend: Touch move {} to ({}, {})",
@@ -362,13 +362,10 @@ impl PanelItemHandler for XdgBackend {
         let _ = toplevel
             .wl_surface()
             .message_sink
-            .send(Message::Seat(SeatMessage::TouchMove {
-                id,
-                position: position.into(),
-            }));
+            .send(Message::Seat(SeatMessage::TouchMove { id, position }));
     }
 
-    async fn touch_up(&self, _ctx: gluon::Context, id: u32, timestamp: Option<Timestamp>) {
+    async fn touch_up(&self, _ctx: gluon::Context, id: u32, _timestamp: Option<Timestamp>) {
         tracing::debug!("Backend: Touch up {}", id);
         let toplevel = self.toplevel();
         let _ = toplevel
@@ -403,7 +400,7 @@ impl PanelItemHandler for XdgBackend {
             .message_sink
             .send(Message::ResizeToplevel {
                 toplevel: self.toplevel().clone(),
-                size: Some(new_size.into()),
+                size: Some(new_size),
             });
     }
 

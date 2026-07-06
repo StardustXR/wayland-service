@@ -25,7 +25,7 @@ impl MappedInner {
     // recreating it with a new release point in the timeline
     pub async fn create(seat: &Arc<Seat>, toplevel: &Arc<Toplevel>, at: SpatialRef) -> Self {
         // TODO: error handling
-        let panel_item = PanelItemUi::new(at, seat, toplevel).await;
+        let panel_item = PanelItemUi::create(at, seat, toplevel).await;
         Self { panel_item }
     }
 }
@@ -176,7 +176,7 @@ impl XdgToplevel for Toplevel {
         if let Some(parent) = parent {
             // Per spec: parent must be another xdg_toplevel surface
             if let Some(parent_toplevel) = client.get::<Toplevel>(parent) {
-                let Some(mapped) = &*parent_toplevel.mapped.lock() else {
+                let Some(_mapped) = &*parent_toplevel.mapped.lock() else {
                     // Per spec: parent surfaces must be mapped before being used as a parent
                     // Setting an unmapped window as parent should raise a protocol error
                     // For now we just unset the parent as a fallback
@@ -274,9 +274,7 @@ impl XdgToplevel for Toplevel {
         };
         self.wl_surface().state_lock().pending.max_size = size;
         if let Some(panel_item) = self.panel_item() {
-            _ = panel_item
-                .panel_shell()
-                .toplevel_max_size(size);
+            _ = panel_item.panel_shell().toplevel_max_size(size);
         }
         Ok(())
     }
@@ -295,9 +293,7 @@ impl XdgToplevel for Toplevel {
         };
         self.wl_surface().state_lock().pending.min_size = size;
         if let Some(panel_item) = self.panel_item() {
-            _ = panel_item
-                .panel_shell()
-                .toplevel_min_size(size);
+            _ = panel_item.panel_shell().toplevel_min_size(size);
         }
         Ok(())
     }

@@ -13,7 +13,6 @@ use stardust_xr_fusion::{
     project_local_resources,
 };
 use tracing_subscriber::EnvFilter;
-use waynest::ProtocolError;
 
 use crate::{socket::Wayland, vulkan_ctx::VkContext};
 
@@ -38,7 +37,7 @@ pub static PROJECT_DIRS: LazyLock<ProjectDirs> = LazyLock::new(|| {
 
 #[tokio::main]
 async fn main() {
-    let wayland_socket_path = PathBuf::from(args_os().skip(1).next().unwrap());
+    let wayland_socket_path = PathBuf::from(args_os().nth(1).unwrap());
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
         .without_time()
@@ -56,7 +55,7 @@ async fn main() {
     _ = CLIENT.set(client.clone());
     _ = BINDER_DEV.set(binder_dev);
 
-    let wayland = Wayland::new(&wayland_socket_path).unwrap();
+    let _wayland = Wayland::new(&wayland_socket_path).unwrap();
 
     let path = stardust_xr_protocol::dir::find_pion_file("stardust-keymap-store").unwrap();
     let fd = OpenOptions::new()

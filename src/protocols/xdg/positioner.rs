@@ -45,7 +45,7 @@ impl PositionerData {
     }
     pub fn infinite_geometry(&self) -> Geometry {
         let anchor_point: Vector2<i32> = match self.anchor {
-            Anchor::TopLeft => self.anchor_rect.origin.into(),
+            Anchor::TopLeft => self.anchor_rect.origin,
             Anchor::Top => [
                 self.anchor_rect.origin.x + (self.anchor_rect.size.x / 2) as i32,
                 self.anchor_rect.origin.y,
@@ -92,9 +92,8 @@ impl PositionerData {
             origin: Vector2 {
                 x: anchor_point.x + self.offset.x,
                 y: anchor_point.y + self.offset.y,
-            }
-            .into(),
-            size: self.size.into(),
+            },
+            size: self.size,
         };
 
         // apply gravity
@@ -118,8 +117,8 @@ impl Default for PositionerData {
         Self {
             size: [0; 2].into(),
             anchor_rect: Geometry {
-                origin: Vector2::from([0; 2]).into(),
-                size: Vector2::from([0; 2]).into(),
+                origin: Vector2::from([0; 2]),
+                size: Vector2::from([0; 2]),
             },
             offset: [0, 0].into(),
             anchor: Anchor::TopLeft,
@@ -176,12 +175,11 @@ impl XdgPositioner for Positioner {
         height: i32,
     ) -> WaylandResult<()> {
         let mut data = self.data.lock();
-        data.anchor_rect.origin = Vector2 { x, y }.into();
+        data.anchor_rect.origin = Vector2 { x, y };
         data.anchor_rect.size = Vector2 {
             x: width.max(0) as u32,
             y: height.max(0) as u32,
-        }
-        .into();
+        };
         data.offset = [0, 0].into();
         Ok(())
     }

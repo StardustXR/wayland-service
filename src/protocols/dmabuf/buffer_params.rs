@@ -86,7 +86,7 @@ impl ZwpLinuxBufferParamsV1 for BufferParams {
 
         // Create plane with the provided parameters
         let plane = DmatexPlane {
-            dmabuf_fd: fd.into(),
+            dmabuf_fd: fd,
             offset: offset as u64,
             row_size: stride as u64,
             array_element_size: 0,
