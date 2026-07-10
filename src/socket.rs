@@ -1,5 +1,5 @@
 use std::{
-    fs::{self, File},
+    fs::{self, File, remove_file},
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -26,9 +26,8 @@ pub struct Wayland {
 }
 impl Wayland {
     pub fn new(socket_path: &Path) -> WaylandResult<Self> {
-        let (socket_path, _lockfile, lock_path) = create_socket(socket_path).ok_or(
-            WaylandError::Io(std::io::ErrorKind::AddrNotAvailable.into()),
-        )?;
+        let (socket_path, _lockfile, lock_path) =
+            create_socket(socket_path).map_err(WaylandError::Io)?;
         let listener = waynest_server::Listener::new_with_path(&socket_path).unwrap();
         let socket_path = listener.socket_path().to_path_buf();
         let _abort_handle = tokio::spawn(
@@ -76,7 +75,7 @@ impl Drop for Wayland {
     }
 }
 
-fn create_socket(socket_path: &Path) -> Option<(PathBuf, File, PathBuf)> {
+fn create_socket(socket_path: &Path) -> std::io::Result<(PathBuf, File, PathBuf)> {
     let socket_path = if socket_path.is_relative() {
         directories::BaseDirs::new()
             .unwrap()
@@ -89,9 +88,17 @@ fn create_socket(socket_path: &Path) -> Option<(PathBuf, File, PathBuf)> {
     let mut lock_name = socket_path.file_name().unwrap().to_os_string();
     lock_name.push(".lock");
     let lock_path = socket_path.with_file_name(lock_name);
-    let lock_file = File::create(&lock_path).ok()?;
-    lock_file.try_lock().ok()?;
-    Some((socket_path, lock_file, lock_path))
+    let lock_file = if lock_path.exists() {
+        File::open(&lock_path)
+    } else {
+        File::create(&lock_path)
+    }?;
+    lock_file.try_lock()?;
+    // we know the wayland should be free since we can lock the lockfile
+    if socket_path.exists() {
+        remove_file(&socket_path)?;
+    }
+    Ok((socket_path, lock_file, lock_path))
 }
 
 struct WaylandClient {
