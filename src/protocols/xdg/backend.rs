@@ -102,9 +102,13 @@ impl XdgBackend {
             async move {
                 drop_future.await;
                 if let Some(obj) = obj.upgrade() {
+                    let Some(seat) = obj.seat.upgrade() else {
+                        tracing::warn!("seat gone, cannot switch panel shell");
+                        return;
+                    };
                     let shell = PanelItemUi::create(
                         obj.output_spatial.get().unwrap().clone(),
-                        &obj.seat.upgrade().unwrap(),
+                        &seat,
                         &obj.toplevel(),
                     )
                     .await;

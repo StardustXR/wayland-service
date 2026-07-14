@@ -80,7 +80,7 @@ impl XdgSurface for Surface {
 
         let toplevel_weak = Arc::downgrade(&toplevel);
         let display = client.get::<Display>(ObjectId::DISPLAY).unwrap();
-        let seat = Arc::downgrade(display.seat.get().unwrap());
+        let seat = display.seat.get().map(Arc::downgrade).unwrap_or_default();
         let pid = dbg!(display.pid);
         let configured = self.configured.clone();
         let mut first_commit = true;
@@ -135,8 +135,11 @@ impl XdgSurface for Surface {
                                 .unwrap();
                         spatial_ref
                     };
-                    let mapped_inner =
-                        MappedInner::create(&seat.upgrade().unwrap(), &toplevel, spatial_ref).await;
+                    let Some(seat) = seat.upgrade() else {
+                        tracing::warn!("no seat available, cannot map toplevel");
+                        return;
+                    };
+                    let mapped_inner = MappedInner::create(&seat, &toplevel, spatial_ref).await;
                     let mut mapped_lock = toplevel.mapped.lock();
                     // *surface.panel_item.lock() = Arc::downgrade(&mapped_inner.panel_item);
                     mapped_lock.replace(mapped_inner);
