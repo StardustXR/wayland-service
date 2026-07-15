@@ -12,18 +12,19 @@ use mint::{Vector2, Vector3};
 use stardust_xr_fusion::{
     client::FrameInfo,
     dmatex::{DmatexRef, DmatexSubmitRelease},
-    drawable::{MaterialParameter, Model, ModelExt as _, ModelPart},
-    fields::{Field, FieldExt, FieldRef, Shape},
+    drawable::{Lines, LinesExt as _, MaterialParameter, Model, ModelExt as _, ModelPart},
+    fields::{Field, FieldExt, FieldRef, FieldSample, Shape},
     query::{InterfaceDependency, QueriedInterface, QueryableObjectRef},
     spatial::{Spatial, SpatialExt as _, SpatialRef, Transform},
     spatial_query::{
         Point, PointsQuery, PointsQueryHandle, PointsQueryHandler, PointsQueryHandlerHandler,
     },
-    types::{Resource, Size2},
+    types::{Resource, Size2, rgba_linear},
 };
 use stardust_xr_molecules::{
     FrameSensitive, UIElement,
     grabbable::{Grabbable, GrabbableSettings, PointerMode},
+    lines::arrow,
 };
 use stardust_xr_panel_item::{
     panel_item::{ChildState, Geometry, PanelShell, PanelShellHandler, SurfaceUpdateTarget},
@@ -47,6 +48,11 @@ struct ItemHandlerQuery {
     seat: Weak<Seat>,
     replaced: AtomicBool,
     handle: OnceLock<PointsQueryHandle>,
+    /// the acceptor currently in range, along with the field sample the
+    /// server pushed for it (distance/gradient/closest_point), kept fresh by
+    /// `moved` so it can be visualized without us sampling the field ourselves.
+    /// only captured on release.
+    acceptor: RwLock<Option<(PanelItemAcceptor, FieldSample)>>,
 }
 impl ItemHandlerQuery {
     async fn new(
@@ -60,6 +66,7 @@ impl ItemHandlerQuery {
             seat,
             replaced: AtomicBool::new(false),
             handle: OnceLock::new(),
+            acceptor: RwLock::new(None),
         });
         let handle = CLIENT
             .wait()
@@ -107,6 +114,29 @@ impl ItemHandlerQuery {
         ]
     }
 }
+impl ItemHandlerQuery {
+    /// Actually connect to the acceptor currently in range, if any. Should only
+    /// be called once the grabbable holding this UI has been released, so that
+    /// dragging the panel through an acceptor's field doesn't immediately snap
+    /// it in.
+    async fn try_capture(&self) {
+        let Some((acceptor, _sample)) = self.acceptor.read().await.clone() else {
+            return;
+        };
+        let Some(toplevel) = self.toplevel.upgrade() else {
+            tracing::warn!("failed to upgrade toplevel");
+            return;
+        };
+        let Some(seat) = self.seat.upgrade() else {
+            tracing::warn!("failed to upgrade seat");
+            return;
+        };
+        tracing::info!("connecting to new panel item acceptor");
+        let obj = XdgBackend::connect(acceptor, &seat, &toplevel).await;
+        toplevel.switch_panel_shell(obj).await;
+        self.replaced.store(true, Ordering::Relaxed);
+    }
+}
 impl PointsQueryHandlerHandler for ItemHandlerQuery {
     async fn entered(
         &self,
@@ -115,7 +145,7 @@ impl PointsQueryHandlerHandler for ItemHandlerQuery {
         _field: FieldRef,
         _spatial: SpatialRef,
         interfaces: Vec<QueriedInterface>,
-        _distance: f32,
+        sample: FieldSample,
     ) {
         tracing::info!("entered");
         let v = interfaces
@@ -123,18 +153,7 @@ impl PointsQueryHandlerHandler for ItemHandlerQuery {
             .find(|v| v.interface_id == panel_item_acceptor::EXTERNAL_PROTOCOL.protocol_name);
         if let Some(v) = v {
             let acceptor = PanelItemAcceptor::from_object_or_ref(v.interface);
-            let Some(toplevel) = self.toplevel.upgrade() else {
-                tracing::warn!("failed to upgrade toplevel");
-                return;
-            };
-            let Some(seat) = self.seat.upgrade() else {
-                tracing::warn!("failed to upgrade seat");
-                return;
-            };
-            tracing::info!("connecting to new panel item acceptor");
-            let obj = XdgBackend::connect(acceptor, &seat, &toplevel).await;
-            toplevel.switch_panel_shell(obj).await;
-            self.replaced.store(true, Ordering::Relaxed);
+            *self.acceptor.write().await = Some((acceptor, sample));
         }
     }
 
@@ -147,21 +166,14 @@ impl PointsQueryHandlerHandler for ItemHandlerQuery {
         ready(())
     }
 
-    fn moved(
-        &self,
-        _ctx: gluon::Context,
-        _obj: QueryableObjectRef,
-        _distance: f32,
-    ) -> impl Future<Output = ()> + Send + Sync {
-        ready(())
+    async fn moved(&self, _ctx: gluon::Context, _obj: QueryableObjectRef, sample: FieldSample) {
+        if let Some(entry) = self.acceptor.write().await.as_mut() {
+            entry.1 = sample;
+        }
     }
 
-    fn left(
-        &self,
-        _ctx: gluon::Context,
-        _obj: QueryableObjectRef,
-    ) -> impl Future<Output = ()> + Send + Sync {
-        ready(())
+    async fn left(&self, _ctx: gluon::Context, _obj: QueryableObjectRef) {
+        *self.acceptor.write().await = None;
     }
 }
 
@@ -175,6 +187,8 @@ pub struct PanelItemUi {
     input_task: OnceLock<AbortOnDrop>,
     grabbable: RwLock<Grabbable>,
     query: BinderObject<ItemHandlerQuery>,
+    acceptor_indicator: Lines,
+    showing_indicator: AtomicBool,
 }
 
 impl std::fmt::Debug for PanelItemUi {
@@ -226,7 +240,7 @@ impl PanelItemUi {
                 max_distance: 0.02,
                 linear_momentum: None,
                 angular_momentum: None,
-                pointer_mode: PointerMode::Parent,
+                pointer_mode: PointerMode::Align,
             },
         )
         .await
@@ -252,6 +266,7 @@ impl PanelItemUi {
         .await
         .unwrap();
         let part = model.get_part("Panel").await.unwrap().unwrap();
+        let acceptor_indicator = Lines::new(client, &field_spatial, vec![]).await.unwrap();
         let query = ItemHandlerQuery::new(
             Arc::downgrade(toplevel),
             Arc::downgrade(seat),
@@ -268,6 +283,8 @@ impl PanelItemUi {
             input_task: OnceLock::new(),
             model_spatial,
             query,
+            acceptor_indicator,
+            showing_indicator: AtomicBool::new(false),
         });
         let panel_shell = PanelShell::from_handler(&obj);
         let backend = dev.register_object(XdgBackend::new(seat, toplevel, panel_shell, at));
@@ -311,8 +328,38 @@ impl PanelItemUi {
         if grabbable.handle_events() {
             grabbable.frame(&frame_info);
         }
-        if self.query.replaced.load(Ordering::Relaxed) {
-            // what were you trying to do?
+        // only try to capture into an acceptor once the user lets go, so
+        // dragging the panel through an acceptor's field doesn't snap it in.
+        let just_released = grabbable.grab_action().actor_stopped();
+        drop(grabbable);
+        if just_released {
+            self.query.try_capture().await;
+        }
+
+        self.refresh_acceptor_indicator().await;
+    }
+
+    /// Draws an arrow toward the in-range acceptor, if any, using the
+    /// distance/gradient/closest_point the server already pushed to us via
+    /// `entered`/`moved` on the query. No RPC of our own needed here, so this
+    /// is cheap enough to run inline in the per-frame grab-handling loop above.
+    async fn refresh_acceptor_indicator(&self) {
+        match self.query.acceptor.read().await.as_ref() {
+            Some((_, sample)) => {
+                self.showing_indicator.store(true, Ordering::Relaxed);
+                _ = self.acceptor_indicator.set_lines(vec![arrow(
+                    [0.0, 0.0, 0.0],
+                    sample.closest_point,
+                    0.002,
+                    0.01,
+                    rgba_linear!(0.2, 1.0, 0.4, 1.0),
+                )]);
+            }
+            None => {
+                if self.showing_indicator.swap(false, Ordering::Relaxed) {
+                    _ = self.acceptor_indicator.set_lines(vec![]);
+                }
+            }
         }
     }
 }

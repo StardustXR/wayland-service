@@ -213,13 +213,14 @@ checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 [[package]]
 name = "binderbinder"
 version = "0.1.0"
-source = "git+https://github.com/Technobaboo/binderbinder#bc67300889b264553697fd5d720a929c21571954"
+source = "git+https://github.com/Technobaboo/binderbinder#62a750dd29c977b457a359ff47121003fda29e82"
 dependencies = [
  "bitflags",
  "dashmap",
  "rustix",
  "thiserror",
  "tokio",
+ "tokio-util",
  "tracing",
  "tracing-subscriber",
 ]
@@ -694,7 +695,7 @@ dependencies = [
 [[package]]
 name = "gluon"
 version = "0.1.0"
-source = "git+https://github.com/Technobaboo/gluon#7910659982fbfa2d6e31f8741636f6af6b6836a8"
+source = "git+https://github.com/Technobaboo/gluon#ef6d2056a4231cd897ca6ebd8cd618e8eb1831dd"
 dependencies = [
  "binderbinder",
  "bitflags",
@@ -707,7 +708,7 @@ dependencies = [
 [[package]]
 name = "gluon-codegen"
 version = "0.1.0"
-source = "git+https://github.com/Technobaboo/gluon#7910659982fbfa2d6e31f8741636f6af6b6836a8"
+source = "git+https://github.com/Technobaboo/gluon#ef6d2056a4231cd897ca6ebd8cd618e8eb1831dd"
 dependencies = [
  "convert_case",
  "gluon",
@@ -721,7 +722,7 @@ dependencies = [
 [[package]]
 name = "gluon-derive"
 version = "0.1.0"
-source = "git+https://github.com/Technobaboo/gluon#7910659982fbfa2d6e31f8741636f6af6b6836a8"
+source = "git+https://github.com/Technobaboo/gluon#ef6d2056a4231cd897ca6ebd8cd618e8eb1831dd"
 dependencies = [
  "quote",
  "syn",
@@ -730,7 +731,7 @@ dependencies = [
 [[package]]
 name = "gluon-parser"
 version = "0.1.0"
-source = "git+https://github.com/Technobaboo/gluon#7910659982fbfa2d6e31f8741636f6af6b6836a8"
+source = "git+https://github.com/Technobaboo/gluon#ef6d2056a4231cd897ca6ebd8cd618e8eb1831dd"
 dependencies = [
  "ansi_term",
  "chumsky",
@@ -1545,7 +1546,7 @@ dependencies = [
 [[package]]
 name = "stardust-xr-fusion"
 version = "0.51.1"
-source = "git+https://github.com/StardustXR/core.git?branch=binder#7fa65ccdeeea7c901d36947ab0ef94f373a57373"
+source = "git+https://github.com/StardustXR/core.git?branch=binder#2ceb68af1896c88a64d53a8a475c8ef12e67748b"
 dependencies = [
  "glam 0.30.10",
  "gluon",
@@ -1612,7 +1613,7 @@ dependencies = [
 [[package]]
 name = "stardust-xr-protocol"
 version = "0.51.1"
-source = "git+https://github.com/StardustXR/core.git?branch=binder#7fa65ccdeeea7c901d36947ab0ef94f373a57373"
+source = "git+https://github.com/StardustXR/core.git?branch=binder#2ceb68af1896c88a64d53a8a475c8ef12e67748b"
 dependencies = [
  "fnv",
  "glam 0.29.3",
