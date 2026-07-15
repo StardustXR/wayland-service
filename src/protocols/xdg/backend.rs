@@ -23,6 +23,8 @@ use stardust_xr_panel_item::{
     },
     panel_item_acceptor::PanelItemAcceptor,
 };
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Weak;
 use std::sync::{Arc, OnceLock};
 use tokio::task::AbortHandle;
@@ -75,54 +77,63 @@ impl XdgBackend {
         backend.reset_input();
         backend
     }
-    pub async fn connect(
+    /// Boxed so callers (like `PanelItemUi`) don't have to know this function's
+    /// concrete future type: it recursively spawns a task that calls back into
+    /// `PanelItemUi::create`, and any caller that already sits in `create`'s own
+    /// call graph would otherwise create a cycle when rustc tries to resolve the
+    /// opaque `impl Future` types of both functions against each other.
+    pub fn connect(
         item_acceptor: PanelItemAcceptor,
         seat: &Arc<Seat>,
         toplevel: &Arc<Toplevel>,
-    ) -> Arc<BinderObject<XdgBackend>> {
-        let dev = BINDER_DEV.wait();
-        let item_backend = XdgBackend {
-            seat: Arc::downgrade(seat),
-            toplevel: Arc::downgrade(toplevel),
-            children: DashMap::new(),
-            panel_shell: OnceLock::new(),
-            output_spatial: OnceLock::new(),
-            task: OnceLock::new(),
-        };
-        let obj = Arc::new(dev.register_object(item_backend));
-        let (shell, spatial_ref) = item_acceptor
-            .accept(PanelItem::from_handler(&*obj))
-            .await
-            .unwrap();
-        let drop_future = obj.strong_refs_hit_zero();
-        obj.panel_shell.set(shell).unwrap();
-        obj.output_spatial.set(spatial_ref).unwrap();
-        tokio::spawn({
-            let obj = Arc::downgrade(&obj);
-            async move {
-                drop_future.await;
-                if let Some(obj) = obj.upgrade() {
-                    let Some(seat) = obj.seat.upgrade() else {
-                        tracing::warn!("seat gone, cannot switch panel shell");
-                        return;
-                    };
-                    let shell = PanelItemUi::create(
-                        obj.output_spatial.get().unwrap().clone(),
-                        &seat,
-                        &obj.toplevel(),
-                    )
-                    .await;
-                    obj.toplevel().switch_panel_shell(shell).await;
+    ) -> Pin<Box<dyn Future<Output = Arc<BinderObject<XdgBackend>>> + Send>> {
+        let seat = seat.clone();
+        let toplevel = toplevel.clone();
+        Box::pin(async move {
+            let dev = BINDER_DEV.wait();
+            let item_backend = XdgBackend {
+                seat: Arc::downgrade(&seat),
+                toplevel: Arc::downgrade(&toplevel),
+                children: DashMap::new(),
+                panel_shell: OnceLock::new(),
+                output_spatial: OnceLock::new(),
+                task: OnceLock::new(),
+            };
+            let obj = Arc::new(dev.register_object(item_backend));
+            let (shell, spatial_ref) = item_acceptor
+                .accept(PanelItem::from_handler(&*obj))
+                .await
+                .unwrap();
+            let drop_future = obj.strong_refs_hit_zero();
+            obj.panel_shell.set(shell).unwrap();
+            obj.output_spatial.set(spatial_ref).unwrap();
+            tokio::spawn({
+                let obj = Arc::downgrade(&obj);
+                async move {
+                    drop_future.await;
+                    if let Some(obj) = obj.upgrade() {
+                        let Some(seat) = obj.seat.upgrade() else {
+                            tracing::warn!("seat gone, cannot switch panel shell");
+                            return;
+                        };
+                        let shell = PanelItemUi::create(
+                            obj.output_spatial.get().unwrap().clone(),
+                            &seat,
+                            &obj.toplevel(),
+                        )
+                        .await;
+                        obj.toplevel().switch_panel_shell(shell).await;
+                    }
                 }
+            });
+            if let Some(title) = toplevel.title() {
+                _ = obj.panel_shell().toplevel_title(title);
             }
-        });
-        if let Some(title) = toplevel.title() {
-            _ = obj.panel_shell().toplevel_title(title);
-        }
-        if let Some(app_id) = toplevel.app_id() {
-            _ = obj.panel_shell().toplevel_app_id(app_id);
-        }
-        obj
+            if let Some(app_id) = toplevel.app_id() {
+                _ = obj.panel_shell().toplevel_app_id(app_id);
+            }
+            obj
+        })
     }
 
     // Since XdgBackend is created and owned by Mapped which is owned by Toplevel,
