@@ -27,7 +27,7 @@ pub struct Wayland {
 impl Wayland {
     pub fn new(socket_path: &Path) -> WaylandResult<Self> {
         let (socket_path, _lockfile, lock_path) =
-            create_socket(socket_path).map_err(WaylandError::Io)?;
+            create_socket(socket_path).map_err(WaylandError::Io).unwrap();
         let listener = waynest_server::Listener::new_with_path(&socket_path).unwrap();
         let socket_path = listener.socket_path().to_path_buf();
         let _abort_handle = tokio::spawn(

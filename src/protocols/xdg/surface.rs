@@ -1,5 +1,5 @@
 use crate::{
-    CLIENT, PROJECT_DIRS,
+    CLIENT, DEFAULT_PANEL_SHELL_PATH,
     client::{Client, Message},
     display::Display,
     error::{WaylandError, WaylandResult},
@@ -109,8 +109,9 @@ impl XdgSurface for Surface {
                     .and_then(|pid| get_env(pid).ok())
                     .and_then(|mut v| v.remove("STARDUST_STARTUP_TOKEN"));
                 tokio::spawn(async move {
-                    let path = PROJECT_DIRS.config_dir().join("default_panel_shell");
-                    if path.exists() && path.to_str().is_some() {
+                    let path = DEFAULT_PANEL_SHELL_PATH.wait();
+                    let mut auto_connect = false;
+                    if dbg!(path).exists() && path.to_str().is_some() {
                         let mut vars = Vec::with_capacity(4);
                         vars.push(("SDXR_WL_DEFAULT_PANEL_SHELL".into(), "1".into()));
                         if let Some(token) = spatial_token.as_ref() {
@@ -123,6 +124,7 @@ impl XdgSurface for Surface {
                             vars.push(("SDXR_WL_TITLE".into(), title));
                         }
                         protostar_launcher::launch(path.to_str().unwrap().into(), vars).await;
+                        auto_connect = true;
                     }
                     let spatial_ref = if let Some(token) = spatial_token
                         && let Some(spatial_ref) = client.startup_token_spatial(dbg!(token)).await
@@ -139,7 +141,7 @@ impl XdgSurface for Surface {
                         tracing::warn!("no seat available, cannot map toplevel");
                         return;
                     };
-                    let mapped_inner = MappedInner::create(&seat, &toplevel, spatial_ref).await;
+                    let mapped_inner = MappedInner::create(&seat, &toplevel, spatial_ref, auto_connect).await;
                     let mut mapped_lock = toplevel.mapped.lock();
                     // *surface.panel_item.lock() = Arc::downgrade(&mapped_inner.panel_item);
                     mapped_lock.replace(mapped_inner);

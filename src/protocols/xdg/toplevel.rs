@@ -23,9 +23,9 @@ pub struct MappedInner {
 impl MappedInner {
     // TODO: add local panel item ui and make switching work by aborting the release task and
     // recreating it with a new release point in the timeline
-    pub async fn create(seat: &Arc<Seat>, toplevel: &Arc<Toplevel>, at: SpatialRef) -> Self {
+    pub async fn create(seat: &Arc<Seat>, toplevel: &Arc<Toplevel>, at: SpatialRef, auto_insert:bool) -> Self {
         // TODO: error handling
-        let panel_item = PanelItemUi::create(at, seat, toplevel).await;
+        let panel_item = PanelItemUi::create(at, seat, toplevel, auto_insert).await;
         Self { panel_item }
     }
 }

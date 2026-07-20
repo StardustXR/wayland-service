@@ -86,7 +86,7 @@ impl XdgBackend {
         item_acceptor: PanelItemAcceptor,
         seat: &Arc<Seat>,
         toplevel: &Arc<Toplevel>,
-    ) -> Pin<Box<dyn Future<Output = Arc<BinderObject<XdgBackend>>> + Send>> {
+    ) -> Pin<Box<dyn Future<Output = Arc<BinderObject<XdgBackend>>> + Send + Sync>> {
         let seat = seat.clone();
         let toplevel = toplevel.clone();
         Box::pin(async move {
@@ -120,6 +120,7 @@ impl XdgBackend {
                             obj.output_spatial.get().unwrap().clone(),
                             &seat,
                             &obj.toplevel(),
+                            false
                         )
                         .await;
                         obj.toplevel().switch_panel_shell(shell).await;

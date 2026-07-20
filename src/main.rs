@@ -1,10 +1,10 @@
 use std::{
-    env::args_os,
     fs::OpenOptions,
     path::PathBuf,
-    sync::{Arc, LazyLock, OnceLock},
+    sync::{Arc, OnceLock},
 };
 
+use clap::Parser;
 use directories::ProjectDirs;
 use pion_binder::PionBinderDevice;
 use stardust_xr_fusion::{
@@ -31,13 +31,26 @@ pub mod vulkan_ctx;
 pub static CLIENT: OnceLock<Arc<Client<DefaultHandler>>> = OnceLock::new();
 pub static BINDER_DEV: OnceLock<PionBinderDevice> = OnceLock::new();
 pub static KEYMAP_STORE: OnceLock<KeymapStore> = OnceLock::new();
-pub static PROJECT_DIRS: LazyLock<ProjectDirs> = LazyLock::new(|| {
-    ProjectDirs::from("", "", "stardust-wayland-service").expect("failed to init project dirs")
-});
+pub static DEFAULT_PANEL_SHELL_PATH: OnceLock<PathBuf> = OnceLock::new();
+
+#[derive(clap::clap_derive::Parser)]
+struct Args {
+    /// a wayland socket name or path
+    wayland_socket_path: PathBuf,
+    /// override for the default panel shell path, this will be executed with some env vars
+    #[arg(short = 'p', long)]
+    default_panel_shell_path: Option<PathBuf>,
+}
 
 #[tokio::main]
 async fn main() {
-    let wayland_socket_path = PathBuf::from(args_os().nth(1).unwrap());
+    let args = Args::parse();
+    let project_dirs =
+        ProjectDirs::from("", "", "stardust-wayland-service").expect("failed to init project dirs");
+    _ = DEFAULT_PANEL_SHELL_PATH.set(
+        args.default_panel_shell_path
+            .unwrap_or_else(|| project_dirs.config_dir().join("default_panel_shell")),
+    );
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
         .without_time()
@@ -46,7 +59,7 @@ async fn main() {
         .with_line_number(true)
         .init();
     let binder_dev = PionBinderDevice::default();
-    // TODO: maybe allow reconnecting to different server? or multi server support?
+
     let (client, _) = Client::manual_connect(&binder_dev, &[&project_local_resources!("res")])
         .await
         .unwrap();
@@ -55,7 +68,7 @@ async fn main() {
     _ = CLIENT.set(client.clone());
     _ = BINDER_DEV.set(binder_dev);
 
-    let _wayland = Wayland::new(&wayland_socket_path).unwrap();
+    let _wayland = Wayland::new(&args.wayland_socket_path).unwrap();
 
     let path = stardust_xr_protocol::dir::find_pion_file("stardust-keymap-store").unwrap();
     let fd = OpenOptions::new()
