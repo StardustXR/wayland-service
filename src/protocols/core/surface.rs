@@ -16,6 +16,7 @@ use crate::{
 use binderbinder::binder_object::BinderObject;
 use mint::Vector2;
 use parking_lot::{Mutex, RwLock};
+use stardust_xr_fusion::dmatex::{DmatexRef, DmatexSubmitRelease};
 use stardust_xr_panel_item::panel_item::{Geometry, SurfaceUpdateTarget};
 use std::{
     fmt::Display,
@@ -120,6 +121,8 @@ pub struct Surface {
     state_buffer_manager: Arc<SurfaceCommitAwareBufferManager>,
     children: Registry<Surface>,
     parent: OnceLock<Weak<Surface>>,
+    /// used to store unapplied surface updates, so they can be applied later
+    buffered_surface_update: Mutex<Option<(DmatexRef, u64, DmatexSubmitRelease, bool)>>,
     // TODO: make this async
     pub toplevel: RwLock<Weak<Toplevel>>,
 }
@@ -162,6 +165,7 @@ impl Surface {
                 children: Registry::new(),
                 parent: OnceLock::new(),
                 toplevel: RwLock::new(Weak::new()),
+                buffered_surface_update: Mutex::new(None),
             }
         });
         surface.add_updated_current_state_handler(|surface| {
@@ -428,7 +432,25 @@ impl Surface {
                         !buffer.is_transparent(),
                     )
                     .unwrap();
+            } else {
+                self.buffered_surface_update.lock().replace((
+                    dmatex,
+                    acquire,
+                    release,
+                    !buffer.is_transparent(),
+                ));
             }
+        }
+    }
+    pub fn apply_buffered_surface_update(&self) {
+        if let Some((dmatex, acquire, release, opaque)) = self.buffered_surface_update.lock().take()
+            && let Some(panel_item) = self.panel_item()
+            && let Some(surface_id) = self.surface_id.get()
+        {
+            panel_item
+                .panel_shell()
+                .update_surface_dmatex(*surface_id, dmatex, acquire, release, opaque)
+                .unwrap();
         }
     }
 
