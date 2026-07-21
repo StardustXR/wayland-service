@@ -6,7 +6,7 @@ use std::{
     },
 };
 
-use gluon::Handler;
+use gluon::{Handler, ObjectRef};
 use stardust_xr_fusion::dmatex::{DmatexSubmitRelease, DmatexSubmitReleaseHandler};
 use timeline_syncobj::timeline_syncobj::TimelineSyncObj;
 use tracing::{debug, warn};
@@ -20,6 +20,23 @@ pub struct SignalOnDrop {
     consumed: AtomicBool,
 }
 impl SignalOnDrop {
+    pub fn new(timeline: Arc<TimelineSyncObj>, point: u64) -> ObjectRef<Self> {
+        BINDER_DEV
+            .wait()
+            .register_object(Self {
+                timeline,
+                point,
+                consumed: AtomicBool::new(false),
+            })
+            .to_service()
+    }
+    /// does not consume this SignalOnDrop
+    pub fn point(&self) -> u64 {
+        self.point
+    }
+    pub fn timeline(&self) -> &Arc<TimelineSyncObj> {
+        &self.timeline
+    }
     pub fn new_dmatex(timeline: Arc<TimelineSyncObj>, point: u64) -> DmatexSubmitRelease {
         let obj = BINDER_DEV
             .wait()

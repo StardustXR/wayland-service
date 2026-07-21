@@ -4,10 +4,10 @@ use crate::{
     error::{WaylandError, WaylandResult},
     frame_dispatcher::FRAME_EVENT_PROVIDER,
     protocols::{
+        core::buffer::BufferSubmit,
         presentation::{MonotonicTimestamp, PresentationFeedback},
         xdg::{backend::XdgBackend, toplevel::Toplevel},
     },
-    signal_on_drop::SignalOnDrop,
     util::{
         BufferedState, SurfaceCommitAwareBuffer, SurfaceCommitAwareBufferManager,
         registry::Registry,
@@ -16,7 +16,6 @@ use crate::{
 use binderbinder::binder_object::BinderObject;
 use mint::Vector2;
 use parking_lot::{Mutex, RwLock};
-use stardust_xr_fusion::dmatex::{DmatexRef, DmatexSubmitRelease};
 use stardust_xr_panel_item::panel_item::{Geometry, SurfaceUpdateTarget};
 use std::{
     fmt::Display,
@@ -122,7 +121,8 @@ pub struct Surface {
     children: Registry<Surface>,
     parent: OnceLock<Weak<Surface>>,
     /// used to store unapplied surface updates, so they can be applied later
-    buffered_surface_update: Mutex<Option<(DmatexRef, u64, DmatexSubmitRelease, bool)>>,
+    buffered_surface_update: Mutex<Option<BufferSubmit>>,
+    current_buffer_submit: Mutex<Option<BufferSubmit>>,
     // TODO: make this async
     pub toplevel: RwLock<Weak<Toplevel>>,
 }
@@ -166,6 +166,7 @@ impl Surface {
                 parent: OnceLock::new(),
                 toplevel: RwLock::new(Weak::new()),
                 buffered_surface_update: Mutex::new(None),
+                current_buffer_submit: Mutex::new(None),
             }
         });
         surface.add_updated_current_state_handler(|surface| {
@@ -416,8 +417,7 @@ impl Surface {
 impl Surface {
     pub(super) fn buffer_update(&self) {
         if let Some(buffer) = self.state.lock().current().buffer.as_ref() {
-            let (dmatex, timeline, acquire, release) = buffer.update();
-            let release = SignalOnDrop::new_dmatex(timeline, release);
+            let submit = buffer.update();
             if let Some(panel_item) = self.panel_item()
                 && let Some(surface_id) = self.surface_id.get()
             {
@@ -426,31 +426,66 @@ impl Surface {
                     .panel_shell()
                     .update_surface_dmatex(
                         *surface_id,
-                        dmatex,
-                        acquire,
-                        release,
+                        submit.dmatex(),
+                        submit.acquire(),
+                        submit.release(),
                         !buffer.is_transparent(),
                     )
                     .unwrap();
+                self.current_buffer_submit.lock().replace(submit);
             } else {
-                self.buffered_surface_update.lock().replace((
-                    dmatex,
-                    acquire,
-                    release,
-                    !buffer.is_transparent(),
-                ));
+                self.current_buffer_submit.lock().take();
+                self.buffered_surface_update.lock().replace(submit);
             }
         }
     }
-    pub fn apply_buffered_surface_update(&self) {
-        if let Some((dmatex, acquire, release, opaque)) = self.buffered_surface_update.lock().take()
+    pub fn apply_buffered_surface_update_recursive(&self) {
+        if let Some(submit) = self.buffered_surface_update.lock().take()
             && let Some(panel_item) = self.panel_item()
             && let Some(surface_id) = self.surface_id.get()
         {
             panel_item
                 .panel_shell()
-                .update_surface_dmatex(*surface_id, dmatex, acquire, release, opaque)
+                .update_surface_dmatex(
+                    *surface_id,
+                    submit.dmatex(),
+                    submit.acquire(),
+                    submit.release(),
+                    !submit.buffer().is_transparent(),
+                )
                 .unwrap();
+            self.current_buffer_submit.lock().replace(submit);
+        }
+        for child in self.children.get_valid_contents() {
+            child.apply_buffered_surface_update_recursive();
+        }
+    }
+    pub fn reapply_buffer_recursive(&self) {
+        let submit = self.current_buffer_submit.lock().take();
+        if let Some(submit) = submit {
+            let submit = submit.reapply();
+            if let Some(panel_item) = self.panel_item()
+                && let Some(surface_id) = self.surface_id.get()
+            {
+                // TODO: figure out something better for panel shell migration
+                panel_item
+                    .panel_shell()
+                    .update_surface_dmatex(
+                        *surface_id,
+                        submit.dmatex(),
+                        submit.acquire(),
+                        submit.release(),
+                        !submit.buffer().is_transparent(),
+                    )
+                    .unwrap();
+                self.current_buffer_submit.lock().replace(submit);
+            } else {
+                self.current_buffer_submit.lock().take();
+                self.buffered_surface_update.lock().replace(submit);
+            }
+        }
+        for child in self.children.get_valid_contents() {
+            child.reapply_buffer_recursive();
         }
     }
 

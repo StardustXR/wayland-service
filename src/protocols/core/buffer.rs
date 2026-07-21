@@ -2,13 +2,16 @@ use crate::client::{Client, MessageSink};
 use crate::error::WaylandResult;
 use crate::protocols::core::shm_buffer_backing::ShmBufferBacking;
 use crate::protocols::dmabuf::buffer_backing::DmabufBacking;
+use crate::signal_on_drop::SignalOnDrop;
 use crate::util::AbortOnDrop;
 
+use gluon::ObjectRef;
 use mint::Vector2;
-use stardust_xr_fusion::dmatex::DmatexRef;
+use stardust_xr_fusion::dmatex::{DmatexRef, DmatexSubmitRelease};
 use std::sync::Arc;
 use std::time::Duration;
 use timeline_syncobj::timeline_syncobj::TimelineSyncObj;
+use tokio::task::AbortHandle;
 use waynest::ObjectId;
 pub use waynest_protocols::server::core::wayland::wl_buffer::*;
 use waynest_server::{Client as _, RequestDispatcher};
@@ -45,7 +48,7 @@ impl Buffer {
     }
 
     /// returns (dmatex_uid, server_acquire_point, server_release_point)
-    pub fn update(self: &Arc<Self>) -> (DmatexRef, Arc<TimelineSyncObj>, u64, u64) {
+    pub fn update(self: &Arc<Self>) -> BufferSubmit {
         let (dmatex, acquire, release) = match &self.backing {
             BufferBacking::Dmabuf(backing) => backing.update(),
             BufferBacking::Shm(backing) => backing.update(),
@@ -54,22 +57,14 @@ impl Buffer {
             BufferBacking::Dmabuf(backing) => backing.timeline(),
             BufferBacking::Shm(backing) => backing.timeline(),
         };
-        tokio::spawn({
-            let message_sink = self.message_sink.clone();
-            let buffer = self.clone();
-            let timeline = timeline.clone();
-            async move {
-                let _task: AbortOnDrop = tokio::spawn(async {
-                    tokio::time::sleep(Duration::from_millis(500)).await;
-                    tracing::warn!("buffer not released for 500ms");
-                })
-                .into();
-                timeline.wait_async(release).unwrap().await;
-                tracing::trace!("sending buffer release");
-                message_sink.send(crate::client::Message::ReleaseBuffer(buffer))
-            }
-        });
-        (dmatex, timeline, acquire, release)
+        let release_task = self.release_task(timeline.clone(), release);
+        BufferSubmit {
+            dmatex,
+            acquire,
+            release: SignalOnDrop::new(timeline, release),
+            release_task,
+            buffer: self.clone(),
+        }
     }
 
     pub fn is_transparent(&self) -> bool {
@@ -84,6 +79,67 @@ impl Buffer {
             BufferBacking::Shm(backing) => backing.size(),
             BufferBacking::Dmabuf(backing) => backing.size(),
         }
+    }
+    fn new_timeline_point(&self) -> u64 {
+        match &self.backing {
+            BufferBacking::Shm(backing) => backing.new_timeline_point(),
+            BufferBacking::Dmabuf(backing) => backing.new_timeline_point(),
+        }
+    }
+    fn release_task(self: &Arc<Self>, timeline: Arc<TimelineSyncObj>, release: u64) -> AbortHandle {
+        tokio::spawn({
+            let message_sink = self.message_sink.clone();
+            let buffer = self.clone();
+            async move {
+                let _task: AbortOnDrop = tokio::spawn(async {
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                    tracing::warn!("buffer not released for 500ms");
+                })
+                .into();
+                timeline.wait_async(release).unwrap().await;
+                tracing::trace!("sending buffer release");
+                message_sink.send(crate::client::Message::ReleaseBuffer(buffer))
+            }
+        })
+        .abort_handle()
+    }
+}
+pub struct BufferSubmit {
+    dmatex: DmatexRef,
+    acquire: u64,
+    release: ObjectRef<SignalOnDrop>,
+    // this is explicitly not an AbortOnDrop, we only want to abort it in some rare cases
+    release_task: AbortHandle,
+    buffer: Arc<Buffer>,
+}
+impl BufferSubmit {
+    pub fn reapply(self) -> BufferSubmit {
+        let old_release = self.release.point();
+        let new_release = self.buffer.new_timeline_point();
+        self.release_task.abort();
+        let release_task = self
+            .buffer
+            .release_task(self.release.timeline().clone(), new_release);
+        let release = SignalOnDrop::new(self.release.timeline().clone(), new_release);
+        BufferSubmit {
+            dmatex: self.dmatex,
+            acquire: old_release,
+            release,
+            release_task,
+            buffer: self.buffer,
+        }
+    }
+    pub fn dmatex(&self) -> DmatexRef {
+        self.dmatex.clone()
+    }
+    pub fn acquire(&self) -> u64 {
+        self.acquire
+    }
+    pub fn release(&self) -> DmatexSubmitRelease {
+        DmatexSubmitRelease::from_handler(&self.release)
+    }
+    pub fn buffer(&self) -> &Arc<Buffer> {
+        &self.buffer
     }
 }
 

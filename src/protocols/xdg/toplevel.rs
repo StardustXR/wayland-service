@@ -23,7 +23,12 @@ pub struct MappedInner {
 impl MappedInner {
     // TODO: add local panel item ui and make switching work by aborting the release task and
     // recreating it with a new release point in the timeline
-    pub async fn create(seat: &Arc<Seat>, toplevel: &Arc<Toplevel>, at: SpatialRef, auto_insert:bool) -> Self {
+    pub async fn create(
+        seat: &Arc<Seat>,
+        toplevel: &Arc<Toplevel>,
+        at: SpatialRef,
+        auto_insert: bool,
+    ) -> Self {
         // TODO: error handling
         let panel_item = PanelItemUi::create(at, seat, toplevel, auto_insert).await;
         Self { panel_item }
@@ -83,6 +88,7 @@ impl Toplevel {
             // without the client having to make a new commit
             mapped.panel_item = new_item;
         }
+        self.wl_surface().reapply_buffer_recursive();
     }
     pub fn panel_item(&self) -> Option<Arc<BinderObject<XdgBackend>>> {
         self.mapped.lock().as_ref().map(|v| v.panel_item.clone())

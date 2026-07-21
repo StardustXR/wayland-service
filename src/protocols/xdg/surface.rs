@@ -146,7 +146,7 @@ impl XdgSurface for Surface {
                     // *surface.panel_item.lock() = Arc::downgrade(&mapped_inner.panel_item);
                     mapped_lock.replace(mapped_inner);
                     drop(mapped_lock);
-                    toplevel.wl_surface().apply_buffered_surface_update();
+                    toplevel.wl_surface().apply_buffered_surface_update_recursive();
                 });
                 return false;
             }

@@ -154,6 +154,10 @@ impl ShmBufferBacking {
     pub fn size(&self) -> Vector2<usize> {
         [self.size.x as usize, self.size.y as usize].into()
     }
+
+    pub fn new_timeline_point(&self) -> u64 {
+        self.next_acquire_point.fetch_add(1, Ordering::Relaxed)
+    }
 }
 
 #[derive(Debug, Error)]
