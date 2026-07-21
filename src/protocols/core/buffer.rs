@@ -114,7 +114,6 @@ pub struct BufferSubmit {
 }
 impl BufferSubmit {
     pub fn reapply(self) -> BufferSubmit {
-        let old_release = self.release.point();
         let new_release = self.buffer.new_timeline_point();
         self.release_task.abort();
         let release_task = self
@@ -123,7 +122,7 @@ impl BufferSubmit {
         let release = SignalOnDrop::new(self.release.timeline().clone(), new_release);
         BufferSubmit {
             dmatex: self.dmatex,
-            acquire: old_release,
+            acquire: self.acquire,
             release,
             release_task,
             buffer: self.buffer,

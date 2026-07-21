@@ -421,7 +421,6 @@ impl Surface {
             if let Some(panel_item) = self.panel_item()
                 && let Some(surface_id) = self.surface_id.get()
             {
-                // TODO: figure out something better for panel shell migration
                 panel_item
                     .panel_shell()
                     .update_surface_dmatex(
@@ -467,7 +466,6 @@ impl Surface {
             if let Some(panel_item) = self.panel_item()
                 && let Some(surface_id) = self.surface_id.get()
             {
-                // TODO: figure out something better for panel shell migration
                 panel_item
                     .panel_shell()
                     .update_surface_dmatex(

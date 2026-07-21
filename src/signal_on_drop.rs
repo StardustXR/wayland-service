@@ -30,10 +30,6 @@ impl SignalOnDrop {
             })
             .to_service()
     }
-    /// does not consume this SignalOnDrop
-    pub fn point(&self) -> u64 {
-        self.point
-    }
     pub fn timeline(&self) -> &Arc<TimelineSyncObj> {
         &self.timeline
     }
