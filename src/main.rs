@@ -3,7 +3,7 @@ use std::{
     path::PathBuf,
     sync::{Arc, OnceLock},
 };
-
+use gluon::Liveness;
 use clap::Parser;
 use directories::ProjectDirs;
 use pion_binder::PionBinderDevice;
@@ -84,5 +84,11 @@ async fn main() {
         .unwrap();
     _ = KEYMAP_STORE.set(KeymapStore::from_object_or_ref(obj));
 
-    tokio::signal::ctrl_c().await.unwrap();
+
+    let server = client.server();
+
+    tokio::select! {
+    	_ = tokio::signal::ctrl_c() => (),
+    	_ = server.death_notification() => (),
+    }
 }
