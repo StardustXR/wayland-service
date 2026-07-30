@@ -111,6 +111,7 @@ impl WaylandClient {
 
         let mut client = Client::new(socket)?;
         let (message_sink, message_source) = mpsc::unbounded_channel();
+        crate::protocols::core::data_device::register_client(message_sink.clone());
 
         client.insert(ObjectId::DISPLAY, Display::new(message_sink, pid))?;
 
@@ -227,6 +228,9 @@ impl WaylandClient {
                 surface
                     .send_presentation_feedback(client, display_timestamp, refresh_cycle)
                     .await?;
+            }
+            msg @ (Message::ClipboardSelection { .. } | Message::ClipboardSend { .. }) => {
+                crate::protocols::core::data_device::handle_message(client, msg).await?;
             }
         }
         Ok(())

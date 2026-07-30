@@ -26,6 +26,7 @@ pub struct Display {
     pub pid: Option<i32>,
     pub seat: OnceLock<Arc<Seat>>,
     pub output: OnceLock<Arc<Output>>,
+    pub data_device: OnceLock<ObjectId>,
     id_counter: CounterU32,
     pub creation_time: Instant,
 }
@@ -36,6 +37,7 @@ impl Display {
             pid,
             seat: OnceLock::new(),
             output: OnceLock::new(),
+            data_device: OnceLock::new(),
             id_counter: CounterU32::new(0xff000000), // Start at 0xff000000 to avoid conflicts with client-generated IDs
             creation_time: Instant::now(),
         }

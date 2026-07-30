@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{os::fd::OwnedFd, sync::Arc};
 
 use pin_project_lite::pin_project;
 use stardust_xr_fusion::types::Size2;
@@ -10,7 +10,13 @@ use waynest_server::{Store, StoreError};
 use crate::{
     error::WaylandError,
     protocols::{
-        core::{buffer::Buffer, callback::Callback, seat::SeatMessage, surface::Surface},
+        core::{
+            buffer::Buffer,
+            callback::Callback,
+            data_device::DataSource,
+            seat::SeatMessage,
+            surface::Surface,
+        },
         presentation::MonotonicTimestamp,
         xdg::toplevel::Toplevel,
     },
@@ -40,6 +46,21 @@ pub enum Message {
         surface: Arc<Surface>,
         display_timestamp: MonotonicTimestamp,
         refresh_cycle: u64,
+    },
+    // TODO: this whole clipboard implementation is the bare minimum to get copy/paste
+    // working across clients. It's missing: cancelling the previous selection's
+    // wl_data_source (the `cancelled` event), removing disconnected clients from the
+    // broadcast list, drag-and-drop (wl_data_device.start_drag is still a no-op), and
+    // any kind of `dnd_action`/`finish` negotiation. See protocols/core/data_device.rs.
+    ClipboardSelection {
+        source: Arc<DataSource>,
+        mime_types: Vec<String>,
+        owner: MessageSink,
+    },
+    ClipboardSend {
+        source: Arc<DataSource>,
+        mime_type: String,
+        fd: OwnedFd,
     },
 }
 
