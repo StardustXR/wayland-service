@@ -225,7 +225,9 @@ impl PanelItemUi {
         let (root, root_ref) = Spatial::new(client, &at, Transform::IDENTITY)
             .await
             .unwrap();
-        root.set_parent_in_place(client.root().clone()).unwrap();
+        root.set_parent_in_place(client.root().clone())
+            .await
+            .unwrap();
         let (field_spatial, field_spatial_ref) =
             Spatial::new(client, &root_ref, Transform::IDENTITY)
                 .await
@@ -255,6 +257,7 @@ impl PanelItemUi {
         .unwrap();
         field_spatial
             .set_parent(grabbable.content_parent().spatial_ref().await.unwrap())
+            .await
             .unwrap();
         let (model_spatial, _) = Spatial::new(
             client,

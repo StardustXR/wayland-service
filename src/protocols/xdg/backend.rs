@@ -166,7 +166,7 @@ impl XdgBackend {
         self.children
             .insert(id, (Arc::downgrade(surface), info.clone()));
 
-        self.panel_shell().create_child(info.clone()).unwrap();
+        self.panel_shell().create_child_event(info.clone()).unwrap();
     }
 
     pub fn reposition_child(&self, surface: &Arc<Surface>, geometry: Geometry) {
@@ -177,7 +177,7 @@ impl XdgBackend {
         if let Some(mut child) = self.children.get_mut(id) {
             child.1.geometry = geometry;
         }
-        self.panel_shell().move_child(*id, geometry).unwrap();
+        self.panel_shell().move_child_event(*id, geometry).unwrap();
     }
 
     pub fn update_child_z_order(&self, surface: &Arc<Surface>, z_order: i32) {
@@ -190,7 +190,7 @@ impl XdgBackend {
             let info = child.1.clone();
             drop(child);
             // TODO: this seems very wrong, idk if we ever communicate the z order here
-            self.panel_shell().move_child(*id, info.geometry).unwrap();
+            self.panel_shell().move_child_event(*id, info.geometry).unwrap();
         }
     }
 
@@ -200,7 +200,7 @@ impl XdgBackend {
         };
         self.children.remove(id);
 
-        self.panel_shell().destroy_child(*id).unwrap();
+        self.panel_shell().destroy_child_event(*id).unwrap();
     }
 }
 impl PanelItemHandler for XdgBackend {

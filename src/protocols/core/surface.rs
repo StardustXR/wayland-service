@@ -423,7 +423,7 @@ impl Surface {
             {
                 panel_item
                     .panel_shell()
-                    .update_surface_dmatex(
+                    .update_surface_dmatex_event(
                         *surface_id,
                         submit.dmatex(),
                         submit.acquire(),
@@ -445,7 +445,7 @@ impl Surface {
         {
             panel_item
                 .panel_shell()
-                .update_surface_dmatex(
+                .update_surface_dmatex_event(
                     *surface_id,
                     submit.dmatex(),
                     submit.acquire(),
@@ -468,7 +468,7 @@ impl Surface {
             {
                 panel_item
                     .panel_shell()
-                    .update_surface_dmatex(
+                    .update_surface_dmatex_event(
                         *surface_id,
                         submit.dmatex(),
                         submit.acquire(),
