@@ -5,3 +5,4 @@ edition = "2024"
 
 [dependencies]
 directories = "6.0.0"
+socket2="0.6.5"

@@ -3,7 +3,10 @@ use std::{
     fs::File,
     io::ErrorKind,
     path::{Path, PathBuf},
+    time::Duration,
 };
+
+use socket2::{Domain, SockAddr, Socket, Type};
 
 fn main() {
     match args().skip(1).next().as_ref().map(|v| v.as_str()) {
@@ -60,16 +63,8 @@ pub fn get_free_wayland_socket_path() -> Option<PathBuf> {
             continue;
         };
 
-        // Check for zombie sockets (file exists but nothing listening)
-        if socket_path.exists() {
-            match std::os::unix::net::UnixStream::connect(&socket_path) {
-                Ok(_) => continue, // Active compositor found - skip
-                Err(e) if e.kind() == ErrorKind::ConnectionRefused => {
-                    // Stale socket - safe to remove since we hold the lock
-                    let _ = std::fs::remove_file(&socket_path);
-                }
-                Err(_) => continue, // Transient error - conservative skip
-            }
+        if socket_used(&socket_path) {
+            continue;
         }
 
         // Found viable candidate: lock held, socket cleared/available
@@ -87,16 +82,8 @@ pub fn get_free_x11_socket_path() -> Option<PathBuf> {
     for display in 0..=32 {
         let socket_path = socket_dir.join(format!("X{display}"));
 
-        // Check for zombie sockets (file exists but nothing listening)
-        if socket_path.exists() {
-            match std::os::unix::net::UnixStream::connect(&socket_path) {
-                Ok(_) => continue, // Active compositor found - skip
-                Err(e) if e.kind() == ErrorKind::ConnectionRefused => {
-                    // Stale socket - safe to remove since we hold the lock
-                    let _ = std::fs::remove_file(&socket_path);
-                }
-                Err(_) => continue, // Transient error - conservative skip
-            }
+        if socket_used(&socket_path) {
+            continue;
         }
 
         // Found viable candidate: lock held, socket cleared/available
@@ -104,4 +91,24 @@ pub fn get_free_x11_socket_path() -> Option<PathBuf> {
     }
 
     None // Exhausted all conventional display numbers
+}
+/// Check for zombie sockets (file exists but nothing listening)
+fn socket_used(socket_path: &Path) -> bool {
+    if !socket_path.exists() {
+        return false;
+    }
+    let socket = Socket::new(Domain::UNIX, Type::STREAM, None);
+    let connect = socket.and_then(|v| {
+        v.connect_timeout(&SockAddr::unix(&socket_path)?, Duration::from_millis(100))
+            .map(|_| v)
+    });
+    match connect {
+        Ok(_) => true, // Active compositor found - skip
+        Err(e) if e.kind() == ErrorKind::ConnectionRefused => {
+            // Stale socket - safe to remove since we hold the lock
+            let _ = std::fs::remove_file(&socket_path);
+            false
+        }
+        Err(_) => true, // Transient error - conservative skip
+    }
 }
