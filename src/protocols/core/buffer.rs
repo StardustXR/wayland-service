@@ -5,9 +5,8 @@ use crate::protocols::dmabuf::buffer_backing::DmabufBacking;
 use crate::signal_on_drop::SignalOnDrop;
 use crate::util::AbortOnDrop;
 
-use gluon::ObjectRef;
 use mint::Vector2;
-use stardust_xr_fusion::dmatex::{DmatexRef, DmatexSubmitRelease};
+use stardust_xr_fusion::dmatex::{DmatexRef, DmatexSubmitRelease, DmatexSubmitReleaseLocal};
 use std::sync::Arc;
 use std::time::Duration;
 use timeline_syncobj::timeline_syncobj::TimelineSyncObj;
@@ -107,7 +106,7 @@ impl Buffer {
 pub struct BufferSubmit {
 	dmatex: DmatexRef,
 	acquire: u64,
-	release: ObjectRef<SignalOnDrop>,
+	release: DmatexSubmitReleaseLocal<SignalOnDrop>,
 	// this is explicitly not an AbortOnDrop, we only want to abort it in some rare cases
 	release_task: AbortHandle,
 	buffer: Arc<Buffer>,
@@ -135,7 +134,7 @@ impl BufferSubmit {
 		self.acquire
 	}
 	pub fn release(&self) -> DmatexSubmitRelease {
-		DmatexSubmitRelease::from_handler(&self.release)
+		self.release.proxy().clone()
 	}
 	pub fn buffer(&self) -> &Arc<Buffer> {
 		&self.buffer

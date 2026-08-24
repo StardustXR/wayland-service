@@ -6,7 +6,7 @@ use crate::{
 };
 
 use super::backend::XdgBackend;
-use binderbinder::binder_object::BinderObject;
+use gluon::Node;
 use mint::Vector2;
 use parking_lot::Mutex;
 use stardust_xr_fusion::spatial::SpatialRef;
@@ -18,7 +18,7 @@ use waynest_server::Client as _;
 
 #[derive(Debug)]
 pub struct MappedInner {
-	pub panel_item: Arc<BinderObject<XdgBackend>>,
+	pub panel_item: Arc<Node<XdgBackend>>,
 }
 impl MappedInner {
 	// TODO: add local panel item ui and make switching work by aborting the release task and
@@ -82,7 +82,7 @@ impl Toplevel {
 			last_committed_res: Mutex::new(None),
 		}
 	}
-	pub async fn switch_panel_shell(&self, new_item: Arc<BinderObject<XdgBackend>>) {
+	pub async fn switch_panel_shell(&self, new_item: Arc<Node<XdgBackend>>) {
 		if let Some(mapped) = self.mapped.lock().as_mut() {
 			// TODO: modify release target point so we can send an actual update
 			// without the client having to make a new commit
@@ -90,7 +90,7 @@ impl Toplevel {
 		}
 		self.wl_surface().reapply_buffer_recursive();
 	}
-	pub fn panel_item(&self) -> Option<Arc<BinderObject<XdgBackend>>> {
+	pub fn panel_item(&self) -> Option<Arc<Node<XdgBackend>>> {
 		self.mapped.lock().as_ref().map(|v| v.panel_item.clone())
 	}
 

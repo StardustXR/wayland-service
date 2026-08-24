@@ -337,7 +337,7 @@ impl WlPointer for Pointer {
 		{
 			panel_item
 				.panel_shell()
-				.set_cursor_visuals_event(surface.and_then(|s| client.get::<Surface>(s)).map(|s| {
+				.set_cursor_visuals(surface.and_then(|s| client.get::<Surface>(s)).map(|s| {
 					let size = s.current_buffer_size().unwrap_or([16; 2].into());
 					Geometry {
 						origin: Vector2::from([hotspot_x, hotspot_y]),

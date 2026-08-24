@@ -6,16 +6,15 @@ use std::{
 	},
 };
 
-use binderbinder::binder_object::BinderObject;
-use gluon::{Handler, ToObjectOrRef};
+use gluon::{Handler, Interface, Node, RefExt, ToRef};
 use mint::{Vector2, Vector3};
 use stardust_xr_fusion::{
 	client::FrameInfo,
 	dmatex::{DmatexRef, DmatexSubmitRelease},
-	drawable::{Lines, LinesExt as _, MaterialParameter, Model, ModelExt as _, ModelPart},
+	drawable::{Lines, LinesExt, MaterialParameter, Model, ModelExt, ModelPart},
 	fields::{Field, FieldExt, FieldRef, FieldSample, Shape},
-	query::{InterfaceDependency, QueriedInterface, QueryableObjectRef},
-	spatial::{Spatial, SpatialExt as _, SpatialRef, Transform},
+	query::{InterfaceDependency, QueriedInterface, QueryableId},
+	spatial::{Spatial, SpatialExt, SpatialRef, Transform},
 	spatial_query::{
 		Point, PointsQuery, PointsQueryHandle, PointsQueryHandler, PointsQueryHandlerHandler,
 	},
@@ -27,13 +26,15 @@ use stardust_xr_molecules::{
 	lines::arrow,
 };
 use stardust_xr_panel_item::{
-	panel_item::{ChildState, Geometry, PanelShell, PanelShellHandler, SurfaceUpdateTarget},
-	panel_item_acceptor::{self, PanelItemAcceptor},
+	panel_item::{
+		ChildState, Geometry, PanelItem, PanelShell, PanelShellHandler, SurfaceUpdateTarget,
+	},
+	panel_item_acceptor::PanelItemAcceptor,
 };
 use tokio::sync::{RwLock, broadcast::error::RecvError};
 
 use crate::{
-	BINDER_DEV, CLIENT,
+	CLIENT,
 	frame_dispatcher::FRAME_EVENT_PROVIDER,
 	protocols::{
 		core::seat::Seat,
@@ -63,22 +64,24 @@ impl ItemHandlerQuery {
 		ref_space: SpatialRef,
 		size: impl Into<Vector2<usize>>,
 		auto_insert: bool,
-	) -> BinderObject<Self> {
-		let obj = BINDER_DEV.wait().register_object(Self {
+	) -> Node<Self> {
+		let (node, query_handler) = PointsQueryHandler::new_node(Self {
 			toplevel,
 			seat,
 			replaced: AtomicBool::new(false),
 			handle: OnceLock::new(),
 			acceptor: RwLock::new(None),
 			auto_insert: AtomicBool::new(auto_insert),
-		});
+		})
+		.unwrap();
+		tracing::debug!("creating object: {:?}", query_handler.to_ref());
 		let handle = CLIENT
 			.wait()
 			.spatial_query_interface()
 			.points_query(PointsQuery {
-				handler: PointsQueryHandler::from_handler(&obj),
+				handler: query_handler.into(),
 				interfaces: vec![InterfaceDependency {
-					id: panel_item_acceptor::EXTERNAL_PROTOCOL.protocol_name.into(),
+					id: PanelItemAcceptor::ID.into(),
 					optional: false,
 				}],
 				reference_spatial: ref_space,
@@ -87,9 +90,8 @@ impl ItemHandlerQuery {
 			.await
 			.unwrap()
 			.unwrap();
-		obj.handle.set(handle).unwrap();
-		tracing::error!("creating object: {:?}", obj.id());
-		obj
+		node.handle.set(handle).unwrap();
+		node
 	}
 	fn get_points(size: impl Into<Vector2<usize>>) -> Vec<Point> {
 		let mut size = PanelItemUi::get_size(size);
@@ -145,7 +147,7 @@ impl PointsQueryHandlerHandler for ItemHandlerQuery {
 	async fn entered(
 		&self,
 		_ctx: gluon::Context,
-		_obj: QueryableObjectRef,
+		_id: QueryableId,
 		_field: FieldRef,
 		_spatial: SpatialRef,
 		interfaces: Vec<QueriedInterface>,
@@ -154,9 +156,9 @@ impl PointsQueryHandlerHandler for ItemHandlerQuery {
 		tracing::info!("entered");
 		let v = interfaces
 			.into_iter()
-			.find(|v| v.interface_id == panel_item_acceptor::EXTERNAL_PROTOCOL.protocol_name);
+			.find(|v| v.interface_id == PanelItemAcceptor::ID);
 		if let Some(v) = v {
-			let acceptor = PanelItemAcceptor::from_object_or_ref(v.interface);
+			let acceptor = PanelItemAcceptor::from_ref(v.interface);
 			*self.acceptor.write().await = Some((acceptor, sample));
 		}
 		if self.auto_insert.swap(false, Ordering::Relaxed) {
@@ -167,19 +169,19 @@ impl PointsQueryHandlerHandler for ItemHandlerQuery {
 	fn interfaces_changed(
 		&self,
 		_ctx: gluon::Context,
-		_obj: QueryableObjectRef,
+		_id: QueryableId,
 		_interfaces: Vec<QueriedInterface>,
 	) -> impl Future<Output = ()> + Send + Sync {
 		ready(())
 	}
 
-	async fn moved(&self, _ctx: gluon::Context, _obj: QueryableObjectRef, sample: FieldSample) {
+	async fn moved(&self, _ctx: gluon::Context, _id: QueryableId, sample: FieldSample) {
 		if let Some(entry) = self.acceptor.write().await.as_mut() {
 			entry.1 = sample;
 		}
 	}
 
-	async fn left(&self, _ctx: gluon::Context, _obj: QueryableObjectRef) {
+	async fn left(&self, _ctx: gluon::Context, _id: QueryableId) {
 		*self.acceptor.write().await = None;
 	}
 }
@@ -193,7 +195,7 @@ pub struct PanelItemUi {
 	part: ModelPart,
 	input_task: OnceLock<AbortOnDrop>,
 	grabbable: RwLock<Grabbable>,
-	query: BinderObject<ItemHandlerQuery>,
+	query: Node<ItemHandlerQuery>,
 	acceptor_indicator: Lines,
 	showing_indicator: AtomicBool,
 }
@@ -215,9 +217,8 @@ impl PanelItemUi {
 		seat: &Arc<Seat>,
 		toplevel: &Arc<Toplevel>,
 		auto_insert: bool,
-	) -> Arc<BinderObject<XdgBackend>> {
+	) -> Arc<Node<XdgBackend>> {
 		let client = CLIENT.wait();
-		let dev = BINDER_DEV.wait();
 		let size = toplevel
 			.wl_surface()
 			.current_buffer_size()
@@ -225,9 +226,7 @@ impl PanelItemUi {
 		let (root, root_ref) = Spatial::new(client, &at, Transform::IDENTITY)
 			.await
 			.unwrap();
-		root.set_parent_in_place(client.root().clone())
-			.await
-			.unwrap();
+		root.set_parent_in_place(client.root().clone()).unwrap();
 		let (field_spatial, field_spatial_ref) =
 			Spatial::new(client, &root_ref, Transform::IDENTITY)
 				.await
@@ -257,7 +256,6 @@ impl PanelItemUi {
 		.unwrap();
 		field_spatial
 			.set_parent(grabbable.content_parent().spatial_ref().await.unwrap())
-			.await
 			.unwrap();
 		let (model_spatial, _) = Spatial::new(
 			client,
@@ -286,7 +284,7 @@ impl PanelItemUi {
 			auto_insert,
 		)
 		.await;
-		let obj = dev.register_object(Self {
+		let (panel_shell_handler, panel_shell) = PanelShell::new_node(Self {
 			root,
 			model,
 			field,
@@ -297,11 +295,16 @@ impl PanelItemUi {
 			query,
 			acceptor_indicator,
 			showing_indicator: AtomicBool::new(false),
-		});
-		let panel_shell = PanelShell::from_handler(&obj);
-		let backend = dev.register_object(XdgBackend::new(seat, toplevel, panel_shell, at));
+		})
+		.unwrap();
+		// The proxy is dropped: this panel item's shell is in-process, so nothing
+		// remote ever reaches the backend and it is only ever used through its
+		// handler. Capturing into an acceptor builds a fresh node in
+		// `XdgBackend::connect` and hands *that* proxy out.
+		let (backend, _backend_proxy) =
+			PanelItem::new_node(XdgBackend::new(seat, toplevel, panel_shell.into(), at)).unwrap();
 		let input_task = tokio::spawn({
-			let obj = Arc::downgrade(&obj);
+			let obj = Arc::downgrade(&panel_shell_handler);
 			async move {
 				let mut recv = FRAME_EVENT_PROVIDER.subscribe();
 				loop {
@@ -324,13 +327,15 @@ impl PanelItemUi {
 				}
 			}
 		});
-		_ = obj.input_task.set(input_task.into());
-		let drop_future = obj.strong_refs_hit_zero();
+		_ = panel_shell_handler.input_task.set(input_task.into());
+		// The node moves in rather than being parked in a field: that keeps the
+		// handler alive without keeping the *node* alive, since a `Node` holds no
+		// `Ref` to itself and still dies once the last shell proxy goes.
 		tokio::spawn(async move {
-			drop_future.await;
+			panel_shell_handler.death_notification().await;
 			tracing::debug!(
 				"dropping panel item ui: {:?}",
-				obj.root.to_binder_object_or_ref()
+				panel_shell_handler.root.to_ref()
 			);
 		});
 		Arc::new(backend)

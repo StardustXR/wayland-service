@@ -13,7 +13,7 @@ use crate::{
 		registry::Registry,
 	},
 };
-use binderbinder::binder_object::BinderObject;
+use gluon::Node;
 use mint::Vector2;
 use parking_lot::{Mutex, RwLock};
 use stardust_xr_panel_item::panel_item::{Geometry, SurfaceUpdateTarget};
@@ -231,7 +231,7 @@ impl Surface {
 	pub fn currently_has_valid_buffer(&self) -> bool {
 		self.state.lock().current().has_valid_buffer()
 	}
-	pub fn panel_item(&self) -> Option<Arc<BinderObject<XdgBackend>>> {
+	pub fn panel_item(&self) -> Option<Arc<Node<XdgBackend>>> {
 		self.toplevel.read().upgrade()?.panel_item()
 	}
 
@@ -423,7 +423,7 @@ impl Surface {
 			{
 				panel_item
 					.panel_shell()
-					.update_surface_dmatex_event(
+					.update_surface_dmatex(
 						*surface_id,
 						submit.dmatex(),
 						submit.acquire(),
@@ -445,7 +445,7 @@ impl Surface {
 		{
 			panel_item
 				.panel_shell()
-				.update_surface_dmatex_event(
+				.update_surface_dmatex(
 					*surface_id,
 					submit.dmatex(),
 					submit.acquire(),
@@ -468,7 +468,7 @@ impl Surface {
 			{
 				panel_item
 					.panel_shell()
-					.update_surface_dmatex_event(
+					.update_surface_dmatex(
 						*surface_id,
 						submit.dmatex(),
 						submit.acquire(),

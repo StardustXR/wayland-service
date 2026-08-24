@@ -17,12 +17,11 @@ members = ["display-socket-finder"]
 
 [workspace.dependencies]
 mint = "0.5.9"
-stardust-xr-fusion = { git = "https://github.com/StardustXR/core.git", version = "0.51.0", branch = "binder" }
-stardust-xr-protocol = { git = "https://github.com/StardustXR/core.git", version = "0.51.0", branch = "binder" }
-stardust-xr-cme = { git = "https://github.com/StardustXR/cme.git", version = "0.51.0", branch = "binder-core" }
-stardust-xr-molecules = { git = "https://github.com/StardustXR/molecules.git", version = "0.51.0", branch = "binder" }
-stardust-xr-panel-item = { git = "https://github.com/StardustXR/panel-item", branch = "binder-core" }
-# stardust-xr-panel-item = { path = "../stardust-xr-panel-item" }
+stardust-xr-fusion = { git = "https://github.com/StardustXR/core.git", branch = "refactor/strongipc" }
+stardust-xr-protocol = { git = "https://github.com/StardustXR/core.git", branch = "refactor/strongipc" }
+stardust-xr-cme = { git = "https://github.com/StardustXR/cme.git", branch = "refactor/strongipc" }
+stardust-xr-molecules = { git = "https://github.com/StardustXR/molecules.git", branch = "refactor/strongipc" }
+stardust-xr-panel-item = { git = "https://github.com/StardustXR/panel-item", branch = "refactor/strongipc" }
 vulkano = { git = "https://github.com/Schmarni-Dev/vulkano", branch = "0_35_dmabuf_fixes", default-features = false }
 
 [dependencies]
@@ -49,7 +48,7 @@ tokio = { version = "1.49.0", features = [
 	"tracing",
 ] }
 tracing = { version = "0.1.44", features = ["async-await"] }
-tracing-subscriber = "0.3.22"
+tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
 thiserror = "2.0.17"
 directories = "6.0.0"
 dashmap = "6.1.0"
@@ -62,12 +61,8 @@ stardust-xr-fusion.workspace = true
 stardust-xr-molecules.workspace = true
 stardust-xr-cme.workspace = true
 stardust-xr-panel-item.workspace = true
-binderbinder.git = "https://github.com/Technobaboo/binderbinder"
-pion-binder.git = "https://github.com/Technobaboo/pion"
-gluon.git = "https://github.com/Technobaboo/gluon"
-# binderbinder.path="../binderbinder"
-# pion-binder.path="../pion"
-# gluon-wire.path="../gluon/gluon-wire"
+gluon.git = "https://github.com/technobaboo/gluon"
+gluon.branch = "refactor/strongipc"
 vulkano.workspace = true
 rand = "0.10.0"
 rustc-hash = "2.1.1"

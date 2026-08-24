@@ -1,14 +1,12 @@
 use clap::Parser;
 use directories::ProjectDirs;
 use gluon::Liveness;
-use pion_binder::PionBinderDevice;
 use stardust_xr_fusion::{
 	client::{Client, DefaultHandler},
-	keymap::KeymapStore,
+	keymap::{KeymapStore, KeymapStoreExt},
 	project_local_resources,
 };
 use std::{
-	fs::OpenOptions,
 	path::PathBuf,
 	sync::{Arc, OnceLock},
 };
@@ -29,7 +27,6 @@ pub mod util;
 pub mod vulkan_ctx;
 
 pub static CLIENT: OnceLock<Arc<Client<DefaultHandler>>> = OnceLock::new();
-pub static BINDER_DEV: OnceLock<PionBinderDevice> = OnceLock::new();
 pub static KEYMAP_STORE: OnceLock<KeymapStore> = OnceLock::new();
 pub static DEFAULT_PANEL_SHELL_PATH: OnceLock<PathBuf> = OnceLock::new();
 
@@ -58,31 +55,17 @@ async fn main() {
 		.with_ansi(true)
 		.with_line_number(true)
 		.init();
-	let binder_dev = PionBinderDevice::default();
 
-	let (client, _) = Client::manual_connect(&binder_dev, &[&project_local_resources!("res")])
+	let (client, _) = Client::connect(&[&project_local_resources!("res")])
 		.await
 		.unwrap();
 	let client = Arc::new(client);
 	VkContext::init(&client).await;
 	_ = CLIENT.set(client.clone());
-	_ = BINDER_DEV.set(binder_dev);
 
 	let _wayland = Wayland::new(&args.wayland_socket_path).unwrap();
 
-	let path = stardust_xr_protocol::dir::find_pion_file("stardust-keymap-store").unwrap();
-	let fd = OpenOptions::new()
-		.read(true)
-		.write(true)
-		.create(false)
-		.open(path)
-		.unwrap();
-	let obj = client
-		.pion_device()
-		.get_binder_ref_from_file(fd)
-		.await
-		.unwrap();
-	_ = KEYMAP_STORE.set(KeymapStore::from_object_or_ref(obj));
+	_ = KEYMAP_STORE.set(KeymapStore::connect().await.unwrap());
 
 	let server = client.server();
 

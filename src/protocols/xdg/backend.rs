@@ -1,6 +1,5 @@
 use super::toplevel::Toplevel;
 use crate::{
-	BINDER_DEV,
 	client::Message,
 	panel_item_ui::PanelItemUi,
 	protocols::core::{
@@ -8,9 +7,8 @@ use crate::{
 		surface::Surface,
 	},
 };
-use binderbinder::binder_object::BinderObject;
 use dashmap::DashMap;
-use gluon::Handler;
+use gluon::{Handler, Node, RefExt};
 use stardust_xr_fusion::{
 	keymap::Keymap,
 	spatial::SpatialRef,
@@ -86,45 +84,43 @@ impl XdgBackend {
 		item_acceptor: PanelItemAcceptor,
 		seat: &Arc<Seat>,
 		toplevel: &Arc<Toplevel>,
-	) -> Pin<Box<dyn Future<Output = Arc<BinderObject<XdgBackend>>> + Send + Sync>> {
+	) -> Pin<Box<dyn Future<Output = Arc<Node<XdgBackend>>> + Send + Sync>> {
 		let seat = seat.clone();
 		let toplevel = toplevel.clone();
 		Box::pin(async move {
-			let dev = BINDER_DEV.wait();
-			let item_backend = XdgBackend {
+			let (node, item_backend) = PanelItem::new_node(XdgBackend {
 				seat: Arc::downgrade(&seat),
 				toplevel: Arc::downgrade(&toplevel),
 				children: DashMap::new(),
 				panel_shell: OnceLock::new(),
 				output_spatial: OnceLock::new(),
 				task: OnceLock::new(),
-			};
-			let obj = Arc::new(dev.register_object(item_backend));
-			let (shell, spatial_ref) = item_acceptor
-				.accept(PanelItem::from_handler(&*obj))
-				.await
-				.unwrap();
-			let drop_future = obj.strong_refs_hit_zero();
+			})
+			.unwrap();
+			let obj = Arc::new(node);
+			let (shell, spatial_ref) = item_acceptor.accept(item_backend).await.unwrap();
 			obj.panel_shell.set(shell).unwrap();
 			obj.output_spatial.set(spatial_ref).unwrap();
 			tokio::spawn({
-				let obj = Arc::downgrade(&obj);
+				// a strong share rather than a `Weak`: a `Node` holds no `Ref` to itself,
+				// so keeping one does not stop the node dying when the last `Ref` goes.
+				// A `Weak` could not work here at all, since `death_notification` borrows
+				// the node across the await.
+				let obj = obj.clone();
 				async move {
-					drop_future.await;
-					if let Some(obj) = obj.upgrade() {
-						let Some(seat) = obj.seat.upgrade() else {
-							tracing::warn!("seat gone, cannot switch panel shell");
-							return;
-						};
-						let shell = PanelItemUi::create(
-							obj.output_spatial.get().unwrap().clone(),
-							&seat,
-							&obj.toplevel(),
-							false,
-						)
-						.await;
-						obj.toplevel().switch_panel_shell(shell).await;
-					}
+					obj.death_notification().await;
+					let Some(seat) = obj.seat.upgrade() else {
+						tracing::warn!("seat gone, cannot switch panel shell");
+						return;
+					};
+					let shell = PanelItemUi::create(
+						obj.output_spatial.get().unwrap().clone(),
+						&seat,
+						&obj.toplevel(),
+						false,
+					)
+					.await;
+					obj.toplevel().switch_panel_shell(shell).await;
 				}
 			});
 			if let Some(title) = toplevel.title() {
@@ -166,7 +162,7 @@ impl XdgBackend {
 		self.children
 			.insert(id, (Arc::downgrade(surface), info.clone()));
 
-		self.panel_shell().create_child_event(info.clone()).unwrap();
+		self.panel_shell().create_child(info.clone()).unwrap();
 	}
 
 	pub fn reposition_child(&self, surface: &Arc<Surface>, geometry: Geometry) {
@@ -177,7 +173,7 @@ impl XdgBackend {
 		if let Some(mut child) = self.children.get_mut(id) {
 			child.1.geometry = geometry;
 		}
-		self.panel_shell().move_child_event(*id, geometry).unwrap();
+		self.panel_shell().move_child(*id, geometry).unwrap();
 	}
 
 	pub fn update_child_z_order(&self, surface: &Arc<Surface>, z_order: i32) {
@@ -191,7 +187,7 @@ impl XdgBackend {
 			drop(child);
 			// TODO: this seems very wrong, idk if we ever communicate the z order here
 			self.panel_shell()
-				.move_child_event(*id, info.geometry)
+				.move_child(*id, info.geometry)
 				.unwrap();
 		}
 	}
@@ -202,7 +198,7 @@ impl XdgBackend {
 		};
 		self.children.remove(id);
 
-		self.panel_shell().destroy_child_event(*id).unwrap();
+		self.panel_shell().destroy_child(*id).unwrap();
 	}
 }
 impl PanelItemHandler for XdgBackend {
