@@ -1,14 +1,14 @@
 use crate::{
-    client::{Client, Message, MessageSink},
-    error::WaylandResult,
+	client::{Client, Message, MessageSink},
+	error::WaylandResult,
 };
 use std::{
-    os::fd::{AsFd, OwnedFd},
-    sync::{Arc, Mutex},
+	os::fd::{AsFd, OwnedFd},
+	sync::{Arc, Mutex},
 };
 use waynest::ObjectId;
 use waynest_protocols::server::core::wayland::{
-    wl_data_device::*, wl_data_device_manager::*, wl_data_offer::WlDataOffer, wl_data_source::*,
+	wl_data_device::*, wl_data_device_manager::*, wl_data_offer::WlDataOffer, wl_data_source::*,
 };
 use waynest_server::Client as _;
 
@@ -38,166 +38,166 @@ use waynest_server::Client as _;
 static CLIENTS: Mutex<Vec<MessageSink>> = Mutex::new(Vec::new());
 
 struct ClipboardSelection {
-    source: Arc<DataSource>,
-    mime_types: Vec<String>,
-    owner: MessageSink,
+	source: Arc<DataSource>,
+	mime_types: Vec<String>,
+	owner: MessageSink,
 }
 /// The current clipboard contents, set by the last client to call set_selection.
 static CLIPBOARD: Mutex<Option<ClipboardSelection>> = Mutex::new(None);
 
 pub fn register_client(sink: MessageSink) {
-    CLIENTS.lock().unwrap().push(sink);
+	CLIENTS.lock().unwrap().push(sink);
 }
 
 #[derive(Debug, waynest_server::RequestDispatcher)]
 #[waynest(error = crate::error::WaylandError, connection = crate::client::Client)]
 pub struct DataDeviceManager;
 impl WlDataDeviceManager for DataDeviceManager {
-    type Connection = Client;
+	type Connection = Client;
 
-    async fn create_data_source(
-        &self,
-        client: &mut Self::Connection,
-        _sender_id: ObjectId,
-        id: ObjectId,
-    ) -> WaylandResult<()> {
-        client.insert(
-            id,
-            DataSource {
-                id,
-                mime_types: Mutex::new(Vec::new()),
-            },
-        )?;
-        Ok(())
-    }
+	async fn create_data_source(
+		&self,
+		client: &mut Self::Connection,
+		_sender_id: ObjectId,
+		id: ObjectId,
+	) -> WaylandResult<()> {
+		client.insert(
+			id,
+			DataSource {
+				id,
+				mime_types: Mutex::new(Vec::new()),
+			},
+		)?;
+		Ok(())
+	}
 
-    async fn get_data_device(
-        &self,
-        client: &mut Client,
-        _sender_id: ObjectId,
-        id: ObjectId,
-        _seat: ObjectId,
-    ) -> WaylandResult<()> {
-        client.insert(id, DataDevice { id })?;
-        let _ = client.display().data_device.set(id);
+	async fn get_data_device(
+		&self,
+		client: &mut Client,
+		_sender_id: ObjectId,
+		id: ObjectId,
+		_seat: ObjectId,
+	) -> WaylandResult<()> {
+		client.insert(id, DataDevice { id })?;
+		let _ = client.display().data_device.set(id);
 
-        // If a clipboard selection already exists, hand this brand-new device an offer
-        // for it immediately, otherwise it'd never find out about the current selection.
-        let existing = CLIPBOARD.lock().unwrap().as_ref().map(|selection| {
-            (
-                selection.source.clone(),
-                selection.mime_types.clone(),
-                selection.owner.clone(),
-            )
-        });
-        if let Some((source, mime_types, owner)) = existing {
-            offer_selection(client, id, source, mime_types, owner).await?;
-        }
+		// If a clipboard selection already exists, hand this brand-new device an offer
+		// for it immediately, otherwise it'd never find out about the current selection.
+		let existing = CLIPBOARD.lock().unwrap().as_ref().map(|selection| {
+			(
+				selection.source.clone(),
+				selection.mime_types.clone(),
+				selection.owner.clone(),
+			)
+		});
+		if let Some((source, mime_types, owner)) = existing {
+			offer_selection(client, id, source, mime_types, owner).await?;
+		}
 
-        Ok(())
-    }
+		Ok(())
+	}
 }
 
 #[derive(Debug, waynest_server::RequestDispatcher)]
 #[waynest(error = crate::error::WaylandError, connection = crate::client::Client)]
 pub struct DataSource {
-    id: ObjectId,
-    mime_types: Mutex<Vec<String>>,
+	id: ObjectId,
+	mime_types: Mutex<Vec<String>>,
 }
 impl WlDataSource for DataSource {
-    type Connection = Client;
+	type Connection = Client;
 
-    async fn offer(
-        &self,
-        _client: &mut Self::Connection,
-        _sender_id: ObjectId,
-        mime_type: String,
-    ) -> WaylandResult<()> {
-        self.mime_types.lock().unwrap().push(mime_type);
-        Ok(())
-    }
+	async fn offer(
+		&self,
+		_client: &mut Self::Connection,
+		_sender_id: ObjectId,
+		mime_type: String,
+	) -> WaylandResult<()> {
+		self.mime_types.lock().unwrap().push(mime_type);
+		Ok(())
+	}
 
-    async fn destroy(
-        &self,
-        client: &mut Self::Connection,
-        _sender_id: ObjectId,
-    ) -> WaylandResult<()> {
-        client.remove(self.id);
-        Ok(())
-    }
+	async fn destroy(
+		&self,
+		client: &mut Self::Connection,
+		_sender_id: ObjectId,
+	) -> WaylandResult<()> {
+		client.remove(self.id);
+		Ok(())
+	}
 
-    async fn set_actions(
-        &self,
-        _client: &mut Self::Connection,
-        _sender_id: ObjectId,
-        _dnd_actions: DndAction,
-    ) -> WaylandResult<()> {
-        Ok(())
-    }
+	async fn set_actions(
+		&self,
+		_client: &mut Self::Connection,
+		_sender_id: ObjectId,
+		_dnd_actions: DndAction,
+	) -> WaylandResult<()> {
+		Ok(())
+	}
 }
 
 #[derive(Debug, waynest_server::RequestDispatcher)]
 #[waynest(error = crate::error::WaylandError, connection = crate::client::Client)]
 pub struct DataDevice {
-    id: ObjectId,
+	id: ObjectId,
 }
 impl WlDataDevice for DataDevice {
-    type Connection = Client;
+	type Connection = Client;
 
-    async fn start_drag(
-        &self,
-        _client: &mut Self::Connection,
-        _sender_id: ObjectId,
-        _source: Option<ObjectId>,
-        _origin: ObjectId,
-        _icon: Option<ObjectId>,
-        _serial: u32,
-    ) -> WaylandResult<()> {
-        // TODO: drag-and-drop isn't implemented at all.
-        Ok(())
-    }
+	async fn start_drag(
+		&self,
+		_client: &mut Self::Connection,
+		_sender_id: ObjectId,
+		_source: Option<ObjectId>,
+		_origin: ObjectId,
+		_icon: Option<ObjectId>,
+		_serial: u32,
+	) -> WaylandResult<()> {
+		// TODO: drag-and-drop isn't implemented at all.
+		Ok(())
+	}
 
-    async fn set_selection(
-        &self,
-        client: &mut Self::Connection,
-        _sender_id: ObjectId,
-        source: Option<ObjectId>,
-        _serial: u32,
-    ) -> WaylandResult<()> {
-        let Some(source_id) = source else {
-            // TODO: doesn't notify anyone that the selection was cleared.
-            *CLIPBOARD.lock().unwrap() = None;
-            return Ok(());
-        };
-        let source = client.try_get::<DataSource>(source_id)?;
-        let mime_types = source.mime_types.lock().unwrap().clone();
-        let owner = client.message_sink();
+	async fn set_selection(
+		&self,
+		client: &mut Self::Connection,
+		_sender_id: ObjectId,
+		source: Option<ObjectId>,
+		_serial: u32,
+	) -> WaylandResult<()> {
+		let Some(source_id) = source else {
+			// TODO: doesn't notify anyone that the selection was cleared.
+			*CLIPBOARD.lock().unwrap() = None;
+			return Ok(());
+		};
+		let source = client.try_get::<DataSource>(source_id)?;
+		let mime_types = source.mime_types.lock().unwrap().clone();
+		let owner = client.message_sink();
 
-        *CLIPBOARD.lock().unwrap() = Some(ClipboardSelection {
-            source: source.clone(),
-            mime_types: mime_types.clone(),
-            owner: owner.clone(),
-        });
+		*CLIPBOARD.lock().unwrap() = Some(ClipboardSelection {
+			source: source.clone(),
+			mime_types: mime_types.clone(),
+			owner: owner.clone(),
+		});
 
-        for sink in CLIENTS.lock().unwrap().iter() {
-            let _ = sink.send(Message::ClipboardSelection {
-                source: source.clone(),
-                mime_types: mime_types.clone(),
-                owner: owner.clone(),
-            });
-        }
+		for sink in CLIENTS.lock().unwrap().iter() {
+			let _ = sink.send(Message::ClipboardSelection {
+				source: source.clone(),
+				mime_types: mime_types.clone(),
+				owner: owner.clone(),
+			});
+		}
 
-        Ok(())
-    }
+		Ok(())
+	}
 
-    async fn release(
-        &self,
-        client: &mut Self::Connection,
-        _sender_id: ObjectId,
-    ) -> WaylandResult<()> {
-        client.remove(self.id);
-        Ok(())
-    }
+	async fn release(
+		&self,
+		client: &mut Self::Connection,
+		_sender_id: ObjectId,
+	) -> WaylandResult<()> {
+		client.remove(self.id);
+		Ok(())
+	}
 }
 
 /// Creates a wl_data_offer for `source` on `device_id` and sends the `data_offer`,
@@ -205,119 +205,119 @@ impl WlDataDevice for DataDevice {
 /// the message sink of the client that actually owns `source`, stashed on the offer so
 /// `receive()` later knows who to ask for the data.
 async fn offer_selection(
-    client: &mut Client,
-    device_id: ObjectId,
-    source: Arc<DataSource>,
-    mime_types: Vec<String>,
-    owner: MessageSink,
+	client: &mut Client,
+	device_id: ObjectId,
+	source: Arc<DataSource>,
+	mime_types: Vec<String>,
+	owner: MessageSink,
 ) -> WaylandResult<()> {
-    let device = client.try_get::<DataDevice>(device_id)?;
-    let offer_id = client.display().next_server_id();
-    let offer = client.insert(
-        offer_id,
-        DataOffer {
-            id: offer_id,
-            source,
-            owner,
-        },
-    )?;
+	let device = client.try_get::<DataDevice>(device_id)?;
+	let offer_id = client.display().next_server_id();
+	let offer = client.insert(
+		offer_id,
+		DataOffer {
+			id: offer_id,
+			source,
+			owner,
+		},
+	)?;
 
-    device.data_offer(client, device_id, offer_id).await?;
-    for mime_type in mime_types {
-        offer.offer(client, offer_id, mime_type).await?;
-    }
-    device.selection(client, device_id, Some(offer_id)).await?;
+	device.data_offer(client, device_id, offer_id).await?;
+	for mime_type in mime_types {
+		offer.offer(client, offer_id, mime_type).await?;
+	}
+	device.selection(client, device_id, Some(offer_id)).await?;
 
-    Ok(())
+	Ok(())
 }
 
 /// Handles `Message::ClipboardSelection`/`Message::ClipboardSend`, dispatched from
 /// socket.rs's per-client message loop.
 pub async fn handle_message(client: &mut Client, message: Message) -> WaylandResult<()> {
-    match message {
-        Message::ClipboardSelection {
-            source,
-            mime_types,
-            owner,
-        } => {
-            let device_id = client.display().data_device.get().copied();
-            if let Some(device_id) = device_id {
-                offer_selection(client, device_id, source, mime_types, owner).await?;
-            }
-        }
-        Message::ClipboardSend {
-            source,
-            mime_type,
-            fd,
-        } => {
-            source
-                .send(client, source.id, mime_type, fd.as_fd())
-                .await?;
-        }
-        _ => unreachable!("handle_message only called for clipboard messages"),
-    }
-    Ok(())
+	match message {
+		Message::ClipboardSelection {
+			source,
+			mime_types,
+			owner,
+		} => {
+			let device_id = client.display().data_device.get().copied();
+			if let Some(device_id) = device_id {
+				offer_selection(client, device_id, source, mime_types, owner).await?;
+			}
+		}
+		Message::ClipboardSend {
+			source,
+			mime_type,
+			fd,
+		} => {
+			source
+				.send(client, source.id, mime_type, fd.as_fd())
+				.await?;
+		}
+		_ => unreachable!("handle_message only called for clipboard messages"),
+	}
+	Ok(())
 }
 
 #[derive(Debug, waynest_server::RequestDispatcher)]
 #[waynest(error = crate::error::WaylandError, connection = crate::client::Client)]
 pub struct DataOffer {
-    id: ObjectId,
-    source: Arc<DataSource>,
-    owner: MessageSink,
+	id: ObjectId,
+	source: Arc<DataSource>,
+	owner: MessageSink,
 }
 impl WlDataOffer for DataOffer {
-    type Connection = Client;
+	type Connection = Client;
 
-    async fn accept(
-        &self,
-        _client: &mut Self::Connection,
-        _sender_id: ObjectId,
-        _serial: u32,
-        _mime_type: Option<String>,
-    ) -> WaylandResult<()> {
-        Ok(())
-    }
+	async fn accept(
+		&self,
+		_client: &mut Self::Connection,
+		_sender_id: ObjectId,
+		_serial: u32,
+		_mime_type: Option<String>,
+	) -> WaylandResult<()> {
+		Ok(())
+	}
 
-    async fn receive(
-        &self,
-        _client: &mut Self::Connection,
-        _sender_id: ObjectId,
-        mime_type: String,
-        fd: OwnedFd,
-    ) -> WaylandResult<()> {
-        let _ = self.owner.send(Message::ClipboardSend {
-            source: self.source.clone(),
-            mime_type,
-            fd,
-        });
-        Ok(())
-    }
+	async fn receive(
+		&self,
+		_client: &mut Self::Connection,
+		_sender_id: ObjectId,
+		mime_type: String,
+		fd: OwnedFd,
+	) -> WaylandResult<()> {
+		let _ = self.owner.send(Message::ClipboardSend {
+			source: self.source.clone(),
+			mime_type,
+			fd,
+		});
+		Ok(())
+	}
 
-    async fn destroy(
-        &self,
-        client: &mut Self::Connection,
-        _sender_id: ObjectId,
-    ) -> WaylandResult<()> {
-        client.remove(self.id);
-        Ok(())
-    }
+	async fn destroy(
+		&self,
+		client: &mut Self::Connection,
+		_sender_id: ObjectId,
+	) -> WaylandResult<()> {
+		client.remove(self.id);
+		Ok(())
+	}
 
-    async fn finish(
-        &self,
-        _client: &mut Self::Connection,
-        _sender_id: ObjectId,
-    ) -> WaylandResult<()> {
-        Ok(())
-    }
+	async fn finish(
+		&self,
+		_client: &mut Self::Connection,
+		_sender_id: ObjectId,
+	) -> WaylandResult<()> {
+		Ok(())
+	}
 
-    async fn set_actions(
-        &self,
-        _client: &mut Self::Connection,
-        _sender_id: ObjectId,
-        _dnd_actions: DndAction,
-        _preferred_action: DndAction,
-    ) -> WaylandResult<()> {
-        Ok(())
-    }
+	async fn set_actions(
+		&self,
+		_client: &mut Self::Connection,
+		_sender_id: ObjectId,
+		_dnd_actions: DndAction,
+		_preferred_action: DndAction,
+	) -> WaylandResult<()> {
+		Ok(())
+	}
 }

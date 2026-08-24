@@ -9,77 +9,77 @@ use waynest_server::{Client as _, RequestDispatcher};
 #[waynest(error = WaylandError, connection = crate::client::Client)]
 pub struct Compositor;
 impl WlCompositor for Compositor {
-    type Connection = crate::client::Client;
+	type Connection = crate::client::Client;
 
-    /// https://wayland.app/protocols/wayland#wl_compositor:request:create_surface
-    async fn create_surface(
-        &self,
-        client: &mut Self::Connection,
-        _sender_id: ObjectId,
-        id: ObjectId,
-    ) -> WaylandResult<()> {
-        let surface = Surface::new(client, id);
-        client.insert_raw(id, surface.clone())?;
-        if let Some(output) = client.display().output.get() {
-            surface.enter(client, id, output.id).await?;
-        }
+	/// https://wayland.app/protocols/wayland#wl_compositor:request:create_surface
+	async fn create_surface(
+		&self,
+		client: &mut Self::Connection,
+		_sender_id: ObjectId,
+		id: ObjectId,
+	) -> WaylandResult<()> {
+		let surface = Surface::new(client, id);
+		client.insert_raw(id, surface.clone())?;
+		if let Some(output) = client.display().output.get() {
+			surface.enter(client, id, output.id).await?;
+		}
 
-        Ok(())
-    }
+		Ok(())
+	}
 
-    /// https://wayland.app/protocols/wayland#wl_compositor:request:create_region
-    async fn create_region(
-        &self,
-        client: &mut Self::Connection,
-        _sender_id: ObjectId,
-        id: ObjectId,
-    ) -> WaylandResult<()> {
-        client.insert(id, Region { id })?;
-        Ok(())
-    }
+	/// https://wayland.app/protocols/wayland#wl_compositor:request:create_region
+	async fn create_region(
+		&self,
+		client: &mut Self::Connection,
+		_sender_id: ObjectId,
+		id: ObjectId,
+	) -> WaylandResult<()> {
+		client.insert(id, Region { id })?;
+		Ok(())
+	}
 }
 
 #[derive(Debug, RequestDispatcher)]
 #[waynest(error = WaylandError, connection = crate::client::Client)]
 pub struct Region {
-    id: ObjectId,
+	id: ObjectId,
 }
 impl WlRegion for Region {
-    type Connection = crate::client::Client;
+	type Connection = crate::client::Client;
 
-    /// https://wayland.app/protocols/wayland#wl_region:request:add
-    async fn add(
-        &self,
-        _client: &mut Self::Connection,
-        _sender_id: ObjectId,
-        _x: i32,
-        _y: i32,
-        _width: i32,
-        _height: i32,
-    ) -> WaylandResult<()> {
-        Ok(())
-    }
+	/// https://wayland.app/protocols/wayland#wl_region:request:add
+	async fn add(
+		&self,
+		_client: &mut Self::Connection,
+		_sender_id: ObjectId,
+		_x: i32,
+		_y: i32,
+		_width: i32,
+		_height: i32,
+	) -> WaylandResult<()> {
+		Ok(())
+	}
 
-    /// https://wayland.app/protocols/wayland#wl_region:request:subtract
-    async fn subtract(
-        &self,
-        _client: &mut Self::Connection,
-        _sender_id: ObjectId,
-        _x: i32,
-        _y: i32,
-        _width: i32,
-        _height: i32,
-    ) -> WaylandResult<()> {
-        Ok(())
-    }
+	/// https://wayland.app/protocols/wayland#wl_region:request:subtract
+	async fn subtract(
+		&self,
+		_client: &mut Self::Connection,
+		_sender_id: ObjectId,
+		_x: i32,
+		_y: i32,
+		_width: i32,
+		_height: i32,
+	) -> WaylandResult<()> {
+		Ok(())
+	}
 
-    /// https://wayland.app/protocols/wayland#wl_region:request:destroy
-    async fn destroy(
-        &self,
-        client: &mut Self::Connection,
-        _sender_id: ObjectId,
-    ) -> WaylandResult<()> {
-        client.remove(self.id);
-        Ok(())
-    }
+	/// https://wayland.app/protocols/wayland#wl_region:request:destroy
+	async fn destroy(
+		&self,
+		client: &mut Self::Connection,
+		_sender_id: ObjectId,
+	) -> WaylandResult<()> {
+		client.remove(self.id);
+		Ok(())
+	}
 }
