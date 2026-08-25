@@ -102,25 +102,35 @@ impl XdgBackend {
 			obj.panel_shell.set(shell).unwrap();
 			obj.output_spatial.set(spatial_ref).unwrap();
 			tokio::spawn({
-				// a strong share rather than a `Weak`: a `Node` holds no `Ref` to itself,
-				// so keeping one does not stop the node dying when the last `Ref` goes.
-				// A `Weak` could not work here at all, since `death_notification` borrows
-				// the node across the await.
+				// A strong share, not a `Weak`: `death_notification` borrows the node
+				// across the await, so there has to be an owner here. That makes this
+				// task a second owner of the backend for as long as the acceptor holds
+				// it, which the `Toplevel` used to be the only one of — hence the
+				// handles below rather than `obj.toplevel()`, whose `expect` assumes
+				// exactly the ownership this breaks.
 				let obj = obj.clone();
 				async move {
 					obj.death_notification().await;
-					let Some(seat) = obj.seat.upgrade() else {
+					// Stop co-owning the backend the moment it is reachable no more,
+					// so it does not outlive its `Toplevel` any longer than the wait
+					// itself forced.
+					let seat = obj.seat.clone();
+					let toplevel = obj.toplevel.clone();
+					let output_spatial = obj.output_spatial.get().unwrap().clone();
+					drop(obj);
+
+					let Some(seat) = seat.upgrade() else {
 						tracing::warn!("seat gone, cannot switch panel shell");
 						return;
 					};
-					let shell = PanelItemUi::create(
-						obj.output_spatial.get().unwrap().clone(),
-						&seat,
-						&obj.toplevel(),
-						false,
-					)
-					.await;
-					obj.toplevel().switch_panel_shell(shell).await;
+					// The window closed while it was still in the acceptor: there is
+					// nothing left to hand a shell back to.
+					let Some(toplevel) = toplevel.upgrade() else {
+						tracing::debug!("toplevel gone, nothing to switch panel shell for");
+						return;
+					};
+					let shell = PanelItemUi::create(output_spatial, &seat, &toplevel, false).await;
+					toplevel.switch_panel_shell(shell).await;
 				}
 			});
 			if let Some(title) = toplevel.title() {
@@ -133,12 +143,25 @@ impl XdgBackend {
 		})
 	}
 
-	// Since XdgBackend is created and owned by Mapped which is owned by Toplevel,
-	// we can safely assume the Toplevel reference will always be valid
-	fn toplevel(&self) -> Arc<Toplevel> {
-		self.toplevel
-			.upgrade()
-			.expect("Toplevel should always be valid while XdgBackend exists")
+	/// The `Toplevel` this backend belongs to, if it is still around.
+	///
+	/// This used to be an `expect`, on the grounds that a backend is owned by the
+	/// `Mapped` owned by its `Toplevel` and so could never outlive it. That is no
+	/// longer true: the acceptor holds refs to this node, and `connect`'s death task
+	/// holds a share of it while it waits for those to go, so a window closed while
+	/// it sits in an acceptor drops the `Toplevel` first and leaves remote calls
+	/// arriving here afterwards. A peer on the other end of a socket should not be
+	/// able to bring the compositor down, so this reports and lets the caller bail.
+	#[track_caller]
+	fn toplevel(&self) -> Option<Arc<Toplevel>> {
+		let toplevel = self.toplevel.upgrade();
+		if toplevel.is_none() {
+			tracing::error!(
+				caller = %std::panic::Location::caller(),
+				"toplevel gone while its panel item backend is still live, ignoring"
+			);
+		}
+		toplevel
 	}
 
 	pub fn panel_shell(&self) -> &PanelShell {
@@ -147,7 +170,7 @@ impl XdgBackend {
 
 	fn surface_from_id(&self, id: &SurfaceId) -> Option<Arc<Surface>> {
 		match id {
-			SurfaceId::Toplevel => Some(self.toplevel().wl_surface().clone()),
+			SurfaceId::Toplevel => Some(self.toplevel()?.wl_surface().clone()),
 			SurfaceId::Child { id } => self.children.get(id).as_deref().and_then(|c| c.0.upgrade()),
 		}
 	}
@@ -186,9 +209,7 @@ impl XdgBackend {
 			let info = child.1.clone();
 			drop(child);
 			// TODO: this seems very wrong, idk if we ever communicate the z order here
-			self.panel_shell()
-				.move_child(*id, info.geometry)
-				.unwrap();
+			self.panel_shell().move_child(*id, info.geometry).unwrap();
 		}
 	}
 
@@ -213,15 +234,18 @@ impl PanelItemHandler for XdgBackend {
 		let Some(surface) = self.surface_from_id(&surface) else {
 			return;
 		};
-		let _ = self
-			.toplevel()
-			.wl_surface()
-			.message_sink
-			.send(Message::Seat(SeatMessage::PointerMotion {
-				surface,
-				position,
-				delta,
-			}));
+		let Some(toplevel) = self.toplevel() else {
+			return;
+		};
+		let _ =
+			toplevel
+				.wl_surface()
+				.message_sink
+				.send(Message::Seat(SeatMessage::PointerMotion {
+					surface,
+					position,
+					delta,
+				}));
 	}
 
 	async fn pointer_button(
@@ -233,15 +257,16 @@ impl PanelItemHandler for XdgBackend {
 		_timestamp: Option<Timestamp>,
 	) {
 		if let Some(surface) = self.surface_from_id(&surface) {
-			let _ = self
-				.toplevel()
-				.wl_surface()
-				.message_sink
-				.send(Message::Seat(SeatMessage::PointerButton {
+			let Some(toplevel) = self.toplevel() else {
+				return;
+			};
+			let _ = toplevel.wl_surface().message_sink.send(Message::Seat(
+				SeatMessage::PointerButton {
 					surface,
 					button,
 					pressed,
-				}));
+				},
+			));
 		}
 	}
 
@@ -254,15 +279,16 @@ impl PanelItemHandler for XdgBackend {
 		_timestamp: Option<Timestamp>,
 	) {
 		if let Some(surface) = self.surface_from_id(&surface) {
-			let _ = self
-				.toplevel()
-				.wl_surface()
-				.message_sink
-				.send(Message::Seat(SeatMessage::PointerScrollDiscrete {
+			let Some(toplevel) = self.toplevel() else {
+				return;
+			};
+			let _ = toplevel.wl_surface().message_sink.send(Message::Seat(
+				SeatMessage::PointerScrollDiscrete {
 					surface,
 					delta,
 					source,
-				}));
+				},
+			));
 		}
 	}
 
@@ -275,15 +301,16 @@ impl PanelItemHandler for XdgBackend {
 		_timestamp: Option<Timestamp>,
 	) {
 		if let Some(surface) = self.surface_from_id(&surface) {
-			let _ = self
-				.toplevel()
-				.wl_surface()
-				.message_sink
-				.send(Message::Seat(SeatMessage::PointerScrollDiscrete {
+			let Some(toplevel) = self.toplevel() else {
+				return;
+			};
+			let _ = toplevel.wl_surface().message_sink.send(Message::Seat(
+				SeatMessage::PointerScrollDiscrete {
 					surface,
 					delta,
 					source,
-				}));
+				},
+			));
 		}
 	}
 
@@ -294,8 +321,10 @@ impl PanelItemHandler for XdgBackend {
 		_timestamp: Option<Timestamp>,
 	) {
 		if let Some(surface) = self.surface_from_id(&surface) {
-			let _ = self
-				.toplevel()
+			let Some(toplevel) = self.toplevel() else {
+				return;
+			};
+			let _ = toplevel
 				.wl_surface()
 				.message_sink
 				.send(Message::Seat(SeatMessage::PointerScrollStop { surface }));
@@ -318,17 +347,20 @@ impl PanelItemHandler for XdgBackend {
 			if pressed { "pressed" } else { "released" }
 		);
 		if let Some(surface) = self.surface_from_id(&surface) {
-			let _ = self
-				.toplevel()
-				.wl_surface()
-				.message_sink
-				.send(Message::Seat(SeatMessage::KeyboardKey {
-					surface,
-					keymap,
-					key,
-					pressed,
-					modifier_state,
-				}));
+			let Some(toplevel) = self.toplevel() else {
+				return;
+			};
+			let _ =
+				toplevel
+					.wl_surface()
+					.message_sink
+					.send(Message::Seat(SeatMessage::KeyboardKey {
+						surface,
+						keymap,
+						key,
+						pressed,
+						modifier_state,
+					}));
 		}
 	}
 
@@ -347,15 +379,18 @@ impl PanelItemHandler for XdgBackend {
 			position.y
 		);
 		if let Some(surface) = self.surface_from_id(&surface) {
-			let _ = self
-				.toplevel()
-				.wl_surface()
-				.message_sink
-				.send(Message::Seat(SeatMessage::TouchDown {
-					surface,
-					id,
-					position,
-				}));
+			let Some(toplevel) = self.toplevel() else {
+				return;
+			};
+			let _ =
+				toplevel
+					.wl_surface()
+					.message_sink
+					.send(Message::Seat(SeatMessage::TouchDown {
+						surface,
+						id,
+						position,
+					}));
 		}
 	}
 
@@ -372,7 +407,9 @@ impl PanelItemHandler for XdgBackend {
 			position.x,
 			position.y
 		);
-		let toplevel = self.toplevel();
+		let Some(toplevel) = self.toplevel() else {
+			return;
+		};
 		let _ = toplevel
 			.wl_surface()
 			.message_sink
@@ -381,7 +418,9 @@ impl PanelItemHandler for XdgBackend {
 
 	async fn touch_up(&self, _ctx: gluon::Context, id: u32, _timestamp: Option<Timestamp>) {
 		tracing::debug!("Backend: Touch up {}", id);
-		let toplevel = self.toplevel();
+		let Some(toplevel) = self.toplevel() else {
+			return;
+		};
 		let _ = toplevel
 			.wl_surface()
 			.message_sink
@@ -389,42 +428,50 @@ impl PanelItemHandler for XdgBackend {
 	}
 
 	async fn close_toplevel(&self, _ctx: gluon::Context) {
-		let _ = self
-			.toplevel()
+		let Some(toplevel) = self.toplevel() else {
+			return;
+		};
+		let _ = toplevel
 			.wl_surface()
 			.message_sink
-			.send(Message::CloseToplevel(self.toplevel().clone()));
+			.send(Message::CloseToplevel(toplevel.clone()));
 	}
 
 	async fn resize_toplevel_to_app_request(&self, _ctx: gluon::Context) {
-		let _ = self
-			.toplevel()
+		let Some(toplevel) = self.toplevel() else {
+			return;
+		};
+		let _ = toplevel
 			.wl_surface()
 			.message_sink
 			.send(Message::ResizeToplevel {
-				toplevel: self.toplevel().clone(),
+				toplevel: toplevel.clone(),
 				size: None,
 			});
 	}
 
 	async fn request_toplevel_resize(&self, _ctx: gluon::Context, new_size: Size2) {
-		let _ = self
-			.toplevel()
+		let Some(toplevel) = self.toplevel() else {
+			return;
+		};
+		let _ = toplevel
 			.wl_surface()
 			.message_sink
 			.send(Message::ResizeToplevel {
-				toplevel: self.toplevel().clone(),
+				toplevel: toplevel.clone(),
 				size: Some(new_size),
 			});
 	}
 
 	async fn toplevel_focused(&self, _ctx: gluon::Context, focused: bool) {
-		let _ = self
-			.toplevel()
+		let Some(toplevel) = self.toplevel() else {
+			return;
+		};
+		let _ = toplevel
 			.wl_surface()
 			.message_sink
 			.send(Message::SetToplevelVisualActive {
-				toplevel: self.toplevel().clone(),
+				toplevel: toplevel.clone(),
 				active: focused,
 			});
 	}
@@ -469,7 +516,9 @@ impl XdgBackend {
 
 	fn reset_input(&self) {
 		tracing::debug!("Backend: Reset input");
-		let toplevel = self.toplevel();
+		let Some(toplevel) = self.toplevel() else {
+			return;
+		};
 		let _ = toplevel
 			.wl_surface()
 			.message_sink
