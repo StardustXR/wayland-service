@@ -109,16 +109,12 @@ impl XdgBackend {
 				// handles below rather than `obj.toplevel()`, whose `expect` assumes
 				// exactly the ownership this breaks.
 				let obj = obj.clone();
+				let seat = obj.seat.clone();
+				let toplevel = obj.toplevel.clone();
+				let output_spatial = obj.output_spatial.get().unwrap().clone();
+				let death_future = obj.death_notifier();
 				async move {
-					obj.death_notification().await;
-					// Stop co-owning the backend the moment it is reachable no more,
-					// so it does not outlive its `Toplevel` any longer than the wait
-					// itself forced.
-					let seat = obj.seat.clone();
-					let toplevel = obj.toplevel.clone();
-					let output_spatial = obj.output_spatial.get().unwrap().clone();
-					drop(obj);
-
+					death_future.wait().await;
 					let Some(seat) = seat.upgrade() else {
 						tracing::warn!("seat gone, cannot switch panel shell");
 						return;
