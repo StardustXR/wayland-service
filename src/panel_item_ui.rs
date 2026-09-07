@@ -268,7 +268,7 @@ impl PanelItemUi {
 			client,
 			&model_spatial,
 			Resource::Namespaced {
-				namespace: "wayland-service".into(),
+				namespace: crate::APP_ID.into(),
 				path: "panel".into(),
 			},
 		)

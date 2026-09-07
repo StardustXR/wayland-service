@@ -26,6 +26,8 @@ pub mod socket;
 pub mod util;
 pub mod vulkan_ctx;
 
+pub const APP_ID: &str = "org.stardustxr.WaylandService";
+
 pub static CLIENT: OnceLock<Arc<Client<DefaultHandler>>> = OnceLock::new();
 pub static KEYMAP_STORE: OnceLock<KeymapStore> = OnceLock::new();
 pub static DEFAULT_PANEL_SHELL_PATH: OnceLock<PathBuf> = OnceLock::new();
@@ -56,7 +58,7 @@ async fn main() {
 		.with_line_number(true)
 		.init();
 
-	let (client, _) = Client::connect(&[&project_local_resources!("res")])
+	let (client, _) = Client::connect(&[&project_local_resources!("data")])
 		.await
 		.unwrap();
 	let client = Arc::new(client);
