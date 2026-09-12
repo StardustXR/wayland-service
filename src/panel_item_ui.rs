@@ -6,7 +6,7 @@ use std::{
 	},
 };
 
-use gluon::{Handler, Interface, Node, RefExt, ToRef};
+use gluon_ipc::{Handler, Interface, Node, RefExt, ToRef};
 use mint::{Vector2, Vector3};
 use stardust_xr_fusion::{
 	client::FrameInfo,
@@ -146,7 +146,7 @@ impl ItemHandlerQuery {
 impl PointsQueryHandlerHandler for ItemHandlerQuery {
 	async fn entered(
 		&self,
-		_ctx: gluon::Context,
+		_ctx: gluon_ipc::Context,
 		_id: QueryableId,
 		_field: FieldRef,
 		_spatial: SpatialRef,
@@ -168,20 +168,20 @@ impl PointsQueryHandlerHandler for ItemHandlerQuery {
 
 	fn interfaces_changed(
 		&self,
-		_ctx: gluon::Context,
+		_ctx: gluon_ipc::Context,
 		_id: QueryableId,
 		_interfaces: Vec<QueriedInterface>,
 	) -> impl Future<Output = ()> + Send + Sync {
 		ready(())
 	}
 
-	async fn moved(&self, _ctx: gluon::Context, _id: QueryableId, sample: FieldSample) {
+	async fn moved(&self, _ctx: gluon_ipc::Context, _id: QueryableId, sample: FieldSample) {
 		if let Some(entry) = self.acceptor.write().await.as_mut() {
 			entry.1 = sample;
 		}
 	}
 
-	async fn left(&self, _ctx: gluon::Context, _id: QueryableId) {
+	async fn left(&self, _ctx: gluon_ipc::Context, _id: QueryableId) {
 		*self.acceptor.write().await = None;
 	}
 }
@@ -398,7 +398,7 @@ impl PanelItemUi {
 impl PanelShellHandler for PanelItemUi {
 	async fn update_surface_dmatex(
 		&self,
-		_ctx: gluon::Context,
+		_ctx: gluon_ipc::Context,
 		surface: SurfaceUpdateTarget,
 		dmatex: DmatexRef,
 		acquire_point: u64,
@@ -431,7 +431,7 @@ impl PanelShellHandler for PanelItemUi {
 			.unwrap();
 	}
 
-	async fn toplevel_resized(&self, _ctx: gluon::Context, new_size: Size2) {
+	async fn toplevel_resized(&self, _ctx: gluon_ipc::Context, new_size: Size2) {
 		let size = Self::get_size([new_size.x as usize, new_size.y as usize]);
 		_ = self
 			.model_spatial
@@ -439,24 +439,24 @@ impl PanelShellHandler for PanelItemUi {
 		_ = self.field.set_shape(Shape::Box { size });
 	}
 
-	async fn toplevel_max_size(&self, _ctx: gluon::Context, _max_size: Option<Size2>) {}
+	async fn toplevel_max_size(&self, _ctx: gluon_ipc::Context, _max_size: Option<Size2>) {}
 
-	async fn toplevel_min_size(&self, _ctx: gluon::Context, _min_size: Option<Size2>) {}
+	async fn toplevel_min_size(&self, _ctx: gluon_ipc::Context, _min_size: Option<Size2>) {}
 
-	async fn toplevel_fullscreen(&self, _ctx: gluon::Context, _fullscreen_active: bool) {}
-
-	// TODO: maybe impl?
-	async fn toplevel_title(&self, _ctx: gluon::Context, _title: String) {}
+	async fn toplevel_fullscreen(&self, _ctx: gluon_ipc::Context, _fullscreen_active: bool) {}
 
 	// TODO: maybe impl?
-	async fn toplevel_app_id(&self, _ctx: gluon::Context, _app_id: String) {}
+	async fn toplevel_title(&self, _ctx: gluon_ipc::Context, _title: String) {}
 
-	async fn set_cursor_visuals(&self, _ctx: gluon::Context, _geometry: Option<Geometry>) {}
+	// TODO: maybe impl?
+	async fn toplevel_app_id(&self, _ctx: gluon_ipc::Context, _app_id: String) {}
+
+	async fn set_cursor_visuals(&self, _ctx: gluon_ipc::Context, _geometry: Option<Geometry>) {}
 
 	// TODO: impl for subsurfaces
-	async fn create_child(&self, _ctx: gluon::Context, _child: ChildState) {}
+	async fn create_child(&self, _ctx: gluon_ipc::Context, _child: ChildState) {}
 
-	async fn move_child(&self, _ctx: gluon::Context, _child_id: u64, _geometry: Geometry) {}
+	async fn move_child(&self, _ctx: gluon_ipc::Context, _child_id: u64, _geometry: Geometry) {}
 
-	async fn destroy_child(&self, _ctx: gluon::Context, _child_id: u64) {}
+	async fn destroy_child(&self, _ctx: gluon_ipc::Context, _child_id: u64) {}
 }

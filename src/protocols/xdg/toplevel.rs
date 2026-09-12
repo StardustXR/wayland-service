@@ -6,7 +6,7 @@ use crate::{
 };
 
 use super::backend::XdgBackend;
-use gluon::Node;
+use gluon_ipc::Node;
 use mint::Vector2;
 use parking_lot::Mutex;
 use stardust_xr_fusion::spatial::SpatialRef;

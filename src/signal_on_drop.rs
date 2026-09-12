@@ -6,7 +6,7 @@ use std::{
 	},
 };
 
-use gluon::{Handler, RefExt};
+use gluon_ipc::{Handler, RefExt};
 use stardust_xr_fusion::dmatex::{
 	DmatexSubmitRelease, DmatexSubmitReleaseHandler, DmatexSubmitReleaseLocal,
 };
@@ -34,7 +34,7 @@ impl SignalOnDrop {
 }
 
 impl DmatexSubmitReleaseHandler for SignalOnDrop {
-	fn consume(&self, _ctx: gluon::Context) -> impl Future<Output = u64> + Send + Sync {
+	fn consume(&self, _ctx: gluon_ipc::Context) -> impl Future<Output = u64> + Send + Sync {
 		debug!("consuming signal on drop");
 		self.consumed.store(true, Ordering::Relaxed);
 		ready(self.point)

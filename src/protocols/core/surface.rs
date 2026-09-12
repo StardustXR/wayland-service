@@ -13,7 +13,7 @@ use crate::{
 		registry::Registry,
 	},
 };
-use gluon::Node;
+use gluon_ipc::Node;
 use mint::Vector2;
 use parking_lot::{Mutex, RwLock};
 use stardust_xr_panel_item::panel_item::{Geometry, SurfaceUpdateTarget};

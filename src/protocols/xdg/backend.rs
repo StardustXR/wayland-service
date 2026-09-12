@@ -8,7 +8,7 @@ use crate::{
 	},
 };
 use dashmap::DashMap;
-use gluon::{Handler, Node, RefExt};
+use gluon_ipc::{Handler, Node, RefExt};
 use stardust_xr_fusion::{
 	keymap::Keymap,
 	spatial::SpatialRef,
@@ -221,7 +221,7 @@ impl XdgBackend {
 impl PanelItemHandler for XdgBackend {
 	async fn pointer_motion(
 		&self,
-		_ctx: gluon::Context,
+		_ctx: gluon_ipc::Context,
 		surface: SurfaceId,
 		delta: Option<Vec2F>,
 		position: Vec2F,
@@ -246,7 +246,7 @@ impl PanelItemHandler for XdgBackend {
 
 	async fn pointer_button(
 		&self,
-		_ctx: gluon::Context,
+		_ctx: gluon_ipc::Context,
 		surface: SurfaceId,
 		button: u32,
 		pressed: bool,
@@ -268,7 +268,7 @@ impl PanelItemHandler for XdgBackend {
 
 	async fn pointer_scroll_discrete(
 		&self,
-		_ctx: gluon::Context,
+		_ctx: gluon_ipc::Context,
 		surface: SurfaceId,
 		delta: Vec2F,
 		source: ScrollSource,
@@ -290,7 +290,7 @@ impl PanelItemHandler for XdgBackend {
 
 	async fn pointer_scroll_pixels(
 		&self,
-		_ctx: gluon::Context,
+		_ctx: gluon_ipc::Context,
 		surface: SurfaceId,
 		delta: Vec2F,
 		source: ScrollSource,
@@ -312,7 +312,7 @@ impl PanelItemHandler for XdgBackend {
 
 	async fn pointer_scroll_stop(
 		&self,
-		_ctx: gluon::Context,
+		_ctx: gluon_ipc::Context,
 		surface: SurfaceId,
 		_timestamp: Option<Timestamp>,
 	) {
@@ -329,7 +329,7 @@ impl PanelItemHandler for XdgBackend {
 
 	async fn key(
 		&self,
-		_ctx: gluon::Context,
+		_ctx: gluon_ipc::Context,
 		surface: SurfaceId,
 		key: u32,
 		pressed: bool,
@@ -362,7 +362,7 @@ impl PanelItemHandler for XdgBackend {
 
 	async fn touch_down(
 		&self,
-		_ctx: gluon::Context,
+		_ctx: gluon_ipc::Context,
 		surface: SurfaceId,
 		id: u32,
 		position: Vec2F,
@@ -392,7 +392,7 @@ impl PanelItemHandler for XdgBackend {
 
 	async fn touch_move(
 		&self,
-		_ctx: gluon::Context,
+		_ctx: gluon_ipc::Context,
 		id: u32,
 		position: Vec2F,
 		_timestamp: Option<Timestamp>,
@@ -412,7 +412,7 @@ impl PanelItemHandler for XdgBackend {
 			.send(Message::Seat(SeatMessage::TouchMove { id, position }));
 	}
 
-	async fn touch_up(&self, _ctx: gluon::Context, id: u32, _timestamp: Option<Timestamp>) {
+	async fn touch_up(&self, _ctx: gluon_ipc::Context, id: u32, _timestamp: Option<Timestamp>) {
 		tracing::debug!("Backend: Touch up {}", id);
 		let Some(toplevel) = self.toplevel() else {
 			return;
@@ -423,7 +423,7 @@ impl PanelItemHandler for XdgBackend {
 			.send(Message::Seat(SeatMessage::TouchUp { id }));
 	}
 
-	async fn close_toplevel(&self, _ctx: gluon::Context) {
+	async fn close_toplevel(&self, _ctx: gluon_ipc::Context) {
 		let Some(toplevel) = self.toplevel() else {
 			return;
 		};
@@ -433,7 +433,7 @@ impl PanelItemHandler for XdgBackend {
 			.send(Message::CloseToplevel(toplevel.clone()));
 	}
 
-	async fn resize_toplevel_to_app_request(&self, _ctx: gluon::Context) {
+	async fn resize_toplevel_to_app_request(&self, _ctx: gluon_ipc::Context) {
 		let Some(toplevel) = self.toplevel() else {
 			return;
 		};
@@ -446,7 +446,7 @@ impl PanelItemHandler for XdgBackend {
 			});
 	}
 
-	async fn request_toplevel_resize(&self, _ctx: gluon::Context, new_size: Size2) {
+	async fn request_toplevel_resize(&self, _ctx: gluon_ipc::Context, new_size: Size2) {
 		let Some(toplevel) = self.toplevel() else {
 			return;
 		};
@@ -459,7 +459,7 @@ impl PanelItemHandler for XdgBackend {
 			});
 	}
 
-	async fn toplevel_focused(&self, _ctx: gluon::Context, focused: bool) {
+	async fn toplevel_focused(&self, _ctx: gluon_ipc::Context, focused: bool) {
 		let Some(toplevel) = self.toplevel() else {
 			return;
 		};

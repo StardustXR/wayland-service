@@ -1,6 +1,6 @@
 use clap::Parser;
 use directories::ProjectDirs;
-use gluon::Liveness;
+use gluon_ipc::Liveness;
 use stardust_xr_fusion::{
 	client::{Client, DefaultHandler},
 	keymap::{KeymapStore, KeymapStoreExt},
