@@ -1708,6 +1708,7 @@ dependencies = [
  "directories",
  "drm-fourcc",
  "futures-sink",
+ "glam",
  "gluon-ipc",
  "input-event-codes",
  "memfd",
