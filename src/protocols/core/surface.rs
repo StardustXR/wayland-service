@@ -145,7 +145,8 @@ impl std::fmt::Debug for Surface {
 }
 impl Surface {
 	#[tracing::instrument(level = "debug", skip_all)]
-	pub fn new(client: &Client, id: ObjectId) -> Arc<Self> {
+	pub fn new(client: &Client, id: ObjectId) -> WaylandResult<Arc<Self>> {
+		let message_sink = client.message_sink()?;
 		let surface = Arc::new_cyclic(|surface| {
 			let manager = SurfaceCommitAwareBufferManager::new(surface.clone());
 			Surface {
@@ -155,7 +156,7 @@ impl Surface {
 					Default::default(),
 					manager.clone(),
 				),
-				message_sink: client.message_sink(),
+				message_sink,
 				role: OnceLock::new(),
 				requires_parent_sync: Mutex::new(None),
 				on_commit_handlers: Mutex::new(Vec::new()),
@@ -195,7 +196,7 @@ impl Surface {
 				}
 			}
 		});
-		surface
+		Ok(surface)
 	}
 
 	pub async fn try_set_role(
@@ -355,7 +356,7 @@ impl Surface {
 			.drain(..)
 			.collect::<Vec<_>>();
 		for feedback in feedbacks {
-			if let Some(display_id) = client.display().output.get().map(|display| display.id) {
+			if let Some(display_id) = client.display()?.output.get().map(|display| display.id) {
 				feedback.sync_output(client, feedback.0, display_id).await?;
 			}
 			let cycle_lo = refresh_cycle as u32;
@@ -416,21 +417,22 @@ impl Surface {
 }
 impl Surface {
 	pub(super) fn buffer_update(&self) {
-		if let Some(buffer) = self.state.lock().current().buffer.as_ref() {
-			let submit = buffer.update();
+		if let Some(buffer) = self.state.lock().current().buffer.as_ref()
+			&& let Some(submit) = buffer.update()
+		{
 			if let Some(panel_item) = self.panel_item()
 				&& let Some(surface_id) = self.surface_id.get()
 			{
-				panel_item
-					.panel_shell()
-					.update_surface_dmatex(
+				if let Some(shell) = panel_item.panel_shell()
+					&& let Err(e) = shell.update_surface_dmatex(
 						*surface_id,
 						submit.dmatex(),
 						submit.acquire(),
 						submit.release(),
 						!buffer.is_transparent(),
-					)
-					.unwrap();
+					) {
+					tracing::error!("failed to send surface update to panel shell: {e}");
+				}
 				self.current_buffer_submit.lock().replace(submit);
 			} else {
 				self.current_buffer_submit.lock().take();
@@ -443,16 +445,16 @@ impl Surface {
 			&& let Some(panel_item) = self.panel_item()
 			&& let Some(surface_id) = self.surface_id.get()
 		{
-			panel_item
-				.panel_shell()
-				.update_surface_dmatex(
+			if let Some(shell) = panel_item.panel_shell()
+				&& let Err(e) = shell.update_surface_dmatex(
 					*surface_id,
 					submit.dmatex(),
 					submit.acquire(),
 					submit.release(),
 					!submit.buffer().is_transparent(),
-				)
-				.unwrap();
+				) {
+				tracing::error!("failed to send surface update to panel shell: {e}");
+			}
 			self.current_buffer_submit.lock().replace(submit);
 		}
 		for child in self.children.get_valid_contents() {
@@ -461,21 +463,20 @@ impl Surface {
 	}
 	pub fn reapply_buffer_recursive(&self) {
 		let submit = self.current_buffer_submit.lock().take();
-		if let Some(submit) = submit {
-			let submit = submit.reapply();
+		if let Some(submit) = submit.and_then(BufferSubmit::reapply) {
 			if let Some(panel_item) = self.panel_item()
 				&& let Some(surface_id) = self.surface_id.get()
 			{
-				panel_item
-					.panel_shell()
-					.update_surface_dmatex(
+				if let Some(shell) = panel_item.panel_shell()
+					&& let Err(e) = shell.update_surface_dmatex(
 						*surface_id,
 						submit.dmatex(),
 						submit.acquire(),
 						submit.release(),
 						!submit.buffer().is_transparent(),
-					)
-					.unwrap();
+					) {
+					tracing::error!("failed to send surface update to panel shell: {e}");
+				}
 				self.current_buffer_submit.lock().replace(submit);
 			} else {
 				self.current_buffer_submit.lock().take();

@@ -1,7 +1,6 @@
 use crate::{
 	CLIENT, DEFAULT_PANEL_SHELL_PATH,
 	client::{Client, Message},
-	display::Display,
 	error::{WaylandError, WaylandResult},
 	protocols::{core::surface::SurfaceRole, xdg::toplevel::Toplevel},
 	util::get_env,
@@ -70,7 +69,7 @@ impl XdgSurface for Surface {
 			Toplevel::new(
 				toplevel_id,
 				self.wl_surface.clone(),
-				client.get::<Self>(sender_id).unwrap(),
+				client.try_get::<Self>(sender_id)?,
 			),
 		)?;
 
@@ -79,12 +78,12 @@ impl XdgSurface for Surface {
 			.await?;
 
 		let toplevel_weak = Arc::downgrade(&toplevel);
-		let display = client.get::<Display>(ObjectId::DISPLAY).unwrap();
+		let display = client.display()?;
 		let seat = display.seat.get().map(Arc::downgrade).unwrap_or_default();
 		let pid = dbg!(display.pid);
 		let configured = self.configured.clone();
 		let mut first_commit = true;
-		let message_tx = client.message_sink().clone();
+		let message_tx = client.message_sink()?.clone();
 		*self.wl_surface.toplevel.write() = toplevel_weak.clone();
 		self.wl_surface.add_commit_handler(move |surface| {
 			let Some(toplevel) = toplevel_weak.upgrade() else {
@@ -111,7 +110,9 @@ impl XdgSurface for Surface {
 				tokio::spawn(async move {
 					let path = DEFAULT_PANEL_SHELL_PATH.wait();
 					let mut auto_connect = false;
-					if dbg!(path).exists() && path.to_str().is_some() {
+					if let Some(path_str) = dbg!(path).to_str()
+						&& path.exists()
+					{
 						let mut vars = Vec::with_capacity(4);
 						vars.push(("SDXR_WL_DEFAULT_PANEL_SHELL".into(), "1".into()));
 						if let Some(token) = spatial_token.as_ref() {
@@ -123,7 +124,7 @@ impl XdgSurface for Surface {
 						if let Some(title) = toplevel.title() {
 							vars.push(("SDXR_WL_TITLE".into(), title));
 						}
-						protostar_launcher::launch(path.to_str().unwrap().into(), vars).await;
+						protostar_launcher::launch(path_str.into(), vars).await;
 						auto_connect = true;
 					}
 					let spatial_ref = if let Some(token) = spatial_token
@@ -131,18 +132,32 @@ impl XdgSurface for Surface {
 					{
 						spatial_ref
 					} else {
-						let (_, spatial_ref) =
-							Spatial::new(client, client.root(), Transform::IDENTITY)
-								.await
-								.unwrap();
-						spatial_ref
+						match Spatial::new(client, client.root(), Transform::IDENTITY).await {
+							Ok((_, spatial_ref)) => spatial_ref,
+							Err(e) => {
+								tracing::error!("failed to create spatial for toplevel: {e}");
+								return;
+							}
+						}
 					};
 					let Some(seat) = seat.upgrade() else {
 						tracing::warn!("no seat available, cannot map toplevel");
 						return;
 					};
-					let mapped_inner =
-						MappedInner::create(&seat, &toplevel, spatial_ref, auto_connect).await;
+					let mapped_inner = match MappedInner::create(
+						&seat,
+						&toplevel,
+						spatial_ref,
+						auto_connect,
+					)
+					.await
+					{
+						Ok(mapped_inner) => mapped_inner,
+						Err(e) => {
+							tracing::error!("failed to create panel item ui for toplevel: {e:#}");
+							return;
+						}
+					};
 					let mut mapped_lock = toplevel.mapped.lock();
 					// *surface.panel_item.lock() = Arc::downgrade(&mapped_inner.panel_item);
 					mapped_lock.replace(mapped_inner);
@@ -159,10 +174,12 @@ impl XdgSurface for Surface {
 				if let Some(size) = surface.current_buffer_size()
 					&& size_lock.is_none_or(|v| v != size)
 				{
-					_ = panel_item.panel_shell().toplevel_resized(Vector2 {
-						x: size.x as u32,
-						y: size.y as u32,
-					});
+					if let Some(shell) = panel_item.panel_shell() {
+						_ = shell.toplevel_resized(Vector2 {
+							x: size.x as u32,
+							y: size.y as u32,
+						});
+					}
 				}
 			}
 			true
@@ -201,9 +218,9 @@ impl XdgSurface for Surface {
 		let toplevel = parent.wl_surface.toplevel.read().clone();
 		*self.wl_surface.toplevel.write() = toplevel;
 
-		let positioner = client.get::<Positioner>(positioner).unwrap();
+		let positioner = client.try_get::<Positioner>(positioner)?;
 
-		let surface = client.get::<Surface>(self.id).unwrap();
+		let surface = client.try_get::<Surface>(self.id)?;
 
 		let popup = client.insert(
 			popup_id,

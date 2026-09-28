@@ -162,7 +162,10 @@ impl Subsurface {
 				if surface.currently_has_valid_buffer() {
 					let toplevel = parent.toplevel.read().clone();
 					*surface.toplevel.write() = toplevel;
-					let info = subsurface.create_child_info(surface.current_buffer_size());
+					let Some(info) = subsurface.create_child_info(surface.current_buffer_size())
+					else {
+						return false;
+					};
 					panel_item.add_child(&subsurface.surface, info);
 					return false; // Remove handler after adding child once
 				}
@@ -212,7 +215,11 @@ impl Subsurface {
 		});
 	}
 
-	fn create_child_info(&self, buffer_size: Option<Vector2<usize>>) -> ChildState {
+	fn create_child_info(&self, buffer_size: Option<Vector2<usize>>) -> Option<ChildState> {
+		let Some(id) = *self.child_id.lock() else {
+			tracing::error!("subsurface has no child id");
+			return None;
+		};
 		let state = self.state.lock();
 
 		let size: Vector2<_> = buffer_size
@@ -234,8 +241,8 @@ impl Subsurface {
 			}
 		};
 
-		ChildState {
-			id: self.child_id.lock().unwrap(),
+		Some(ChildState {
+			id,
 			parent: parent_surface_id,
 			geometry: Geometry {
 				origin: Vector2 {
@@ -249,7 +256,7 @@ impl Subsurface {
 				origin: [0.0; 2].into(),
 				size: [1.0; 2].into(),
 			}],
-		}
+		})
 	}
 }
 

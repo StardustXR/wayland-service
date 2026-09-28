@@ -62,7 +62,11 @@ impl DmabufBacking {
 		} else {
 			DmatexPlanes::Simple {
 				planes: planes.iter().map(|v| v.plane).collect(),
-				dmabuf_fd: planes.into_iter().next().unwrap().dmabuf_fd,
+				dmabuf_fd: planes
+					.into_iter()
+					.next()
+					.ok_or(DmatexImportError::NoPlanes)?
+					.dmabuf_fd,
 			}
 		};
 		let fds = match &planes {
@@ -75,16 +79,17 @@ impl DmabufBacking {
 						.try_clone()
 						.map_err(DmatexImportError::DmabufFdCloneError)?,
 				)
-				.unwrap(),
+				.map_err(DmatexImportError::DmabufFdRegisterError)?,
 			]
 			.into(),
 			DmatexPlanes::Disjoint { planes } => planes
 				.iter()
 				.map(|v| {
-					v.dmabuf_fd
+					let fd = v
+						.dmabuf_fd
 						.try_clone()
-						.map(|fd| AsyncFd::new(fd).unwrap())
-						.map_err(DmatexImportError::DmabufFdCloneError)
+						.map_err(DmatexImportError::DmabufFdCloneError)?;
+					AsyncFd::new(fd).map_err(DmatexImportError::DmabufFdRegisterError)
 				})
 				.collect::<Result<Vec<_>, _>>()?
 				.into(),
@@ -189,6 +194,8 @@ pub enum DmatexImportError {
 	InvalidFormat,
 	#[error("No modifier (no planes)")]
 	NoModifier,
+	#[error("No planes (params already used)")]
+	NoPlanes,
 	#[error("Failed to enumerate Server Dmatex formats: {0}")]
 	FailedToEnumerateServerFormats(stardust_xr_fusion::Error),
 	#[error("Failed to import Dmatex into server: {0}")]
@@ -199,4 +206,6 @@ pub enum DmatexImportError {
 	TimelineExportError(rustix::io::Errno),
 	#[error("Failed clone Dmabuf fd: {0}")]
 	DmabufFdCloneError(std::io::Error),
+	#[error("Failed to register Dmabuf fd with tokio: {0}")]
+	DmabufFdRegisterError(std::io::Error),
 }

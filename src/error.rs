@@ -21,6 +21,8 @@ pub enum WaylandError {
 		code: u32,
 		message: &'static str,
 	},
+	#[error("Stardust error: {0}")]
+	Stardust(#[from] stardust_xr_fusion::Error),
 	#[error("Memfd error: {0}")]
 	MemfdError(#[from] memfd::Error),
 	// #[error("Dmabuf import error: {0}")]

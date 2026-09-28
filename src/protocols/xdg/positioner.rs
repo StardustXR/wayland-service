@@ -40,7 +40,10 @@ impl PositionerData {
 					|| self.gravity == Gravity::TopRight
 					|| self.gravity == Gravity::BottomRight
 			}
-			_ => unreachable!(),
+			_ => {
+				tracing::error!("gravity_has_edge called with a non-edge gravity");
+				false
+			}
 		}
 	}
 	pub fn infinite_geometry(&self) -> Geometry {

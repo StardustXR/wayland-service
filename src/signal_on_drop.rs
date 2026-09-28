@@ -11,7 +11,7 @@ use stardust_xr_fusion::dmatex::{
 	DmatexSubmitRelease, DmatexSubmitReleaseHandler, DmatexSubmitReleaseLocal,
 };
 use timeline_syncobj::timeline_syncobj::TimelineSyncObj;
-use tracing::{debug, warn};
+use tracing::{debug, error, warn};
 
 #[derive(Handler, Debug)]
 pub struct SignalOnDrop {
@@ -20,13 +20,18 @@ pub struct SignalOnDrop {
 	consumed: AtomicBool,
 }
 impl SignalOnDrop {
-	pub fn new(timeline: Arc<TimelineSyncObj>, point: u64) -> DmatexSubmitReleaseLocal<Self> {
+	/// on failure the handler drops right away and signals the point, so the buffer still releases
+	pub fn new(
+		timeline: Arc<TimelineSyncObj>,
+		point: u64,
+	) -> Option<DmatexSubmitReleaseLocal<Self>> {
 		DmatexSubmitRelease::new_service(Self {
 			timeline,
 			point,
 			consumed: AtomicBool::new(false),
 		})
-		.unwrap()
+		.inspect_err(|e| error!("failed to create buffer release service: {e}"))
+		.ok()
 	}
 	pub fn timeline(&self) -> &Arc<TimelineSyncObj> {
 		&self.timeline

@@ -1,4 +1,7 @@
-use crate::{CLIENT, vulkan_ctx::VK};
+use crate::{
+	CLIENT,
+	vulkan_ctx::{VK, VkContext},
+};
 
 use super::shm_pool::ShmPool;
 use mint::Vector2;
@@ -11,8 +14,7 @@ use std::sync::{Arc, LazyLock};
 use thiserror::Error;
 use timeline_syncobj::timeline_syncobj::TimelineSyncObj;
 use tokio::sync::mpsc;
-use vulkano::DeviceSize;
-use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer};
+use vulkano::buffer::{AllocateBufferError, Buffer, BufferCreateInfo, BufferUsage, Subbuffer};
 use vulkano::command_buffer::{
 	AutoCommandBufferBuilder, CommandBufferSubmitInfo, CommandBufferUsage, CopyBufferToImageInfo,
 	SemaphoreSubmitInfo, SubmitInfo,
@@ -23,6 +25,7 @@ use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter};
 use vulkano::sync::semaphore::{
 	ExternalSemaphoreHandleType, ExternalSemaphoreHandleTypes, Semaphore, SemaphoreCreateInfo,
 };
+use vulkano::{DeviceSize, Validated};
 use waynest_protocols::server::core::wayland::wl_shm::Format;
 
 #[derive(Debug)]
@@ -89,14 +92,17 @@ impl ShmBufferBacking {
 			// when supporting more formats we need to change this 4
 			size.x * size.y * 4 as DeviceSize,
 		)
-		// To lazy to properly bubble up the error rn
-		.unwrap();
+		.map_err(ShmBackingCreationError::StagingBufferAllocationFailed)?;
 		let timeline_copy = Arc::new(
 			TimelineSyncObj::import(
 				vk.render_dev.drm_node(),
-				dmatex.timeline.export().unwrap().as_fd(),
+				dmatex
+					.timeline
+					.export()
+					.map_err(ShmBackingCreationError::TimelineCopyFailed)?
+					.as_fd(),
 			)
-			.unwrap(),
+			.map_err(ShmBackingCreationError::TimelineCopyFailed)?,
 		);
 		Ok(Self {
 			pool,
@@ -115,26 +121,37 @@ impl ShmBufferBacking {
 		let acquire = self.next_acquire_point.fetch_add(1, Ordering::Relaxed);
 		let release = self.next_acquire_point.fetch_add(1, Ordering::Relaxed);
 		// TODO: move this to a blocking thread
-		{
-			let mut writer = self.staging_buffer.write().unwrap();
+		match self.staging_buffer.write() {
+			Ok(mut writer) => {
+				let shm_data = self.pool.data_lock();
+				for y in 0..self.size.y {
+					let shm_offset = self.offset + (y as usize * self.stride);
+					let gpu_offset = (y * self.size.x * 4) as usize;
+					let line_len = (self.size.x * 4) as usize;
 
-			let shm_data = self.pool.data_lock();
-			for y in 0..self.size.y {
-				let shm_offset = self.offset + (y as usize * self.stride);
-				let gpu_offset = (y * self.size.x * 4) as usize;
-				let line_len = (self.size.x * 4) as usize;
-
-				writer[gpu_offset..(gpu_offset + line_len)]
-					.copy_from_slice(&shm_data[shm_offset..(shm_offset + line_len)]);
+					let (Some(dst), Some(src)) = (
+						writer.get_mut(gpu_offset..(gpu_offset + line_len)),
+						shm_data.get(shm_offset..(shm_offset + line_len)),
+					) else {
+						tracing::error!("shm buffer reaches outside its pool");
+						break;
+					};
+					dst.copy_from_slice(src);
+				}
 			}
+			Err(e) => tracing::error!("failed to write shm staging buffer: {e}"),
 		}
-		UPLOAD_QUEUE
+		// still sent on a failed copy so the acquire point gets signaled
+		if UPLOAD_QUEUE
 			.send(DmatexUpload {
 				tex: self.dmatex.clone(),
 				staging: self.staging_buffer.clone(),
 				acquire,
 			})
-			.unwrap();
+			.is_err()
+		{
+			tracing::error!("dmatex upload thread is gone");
+		}
 		// self.staging_buffer.
 		(self.dmatex.dmatex.clone(), acquire, release)
 	}
@@ -168,6 +185,10 @@ pub enum ShmBackingCreationError {
 	DmatexFormatEnumerationFailed(stardust_xr_fusion::Error),
 	#[error("Format not supported by Dmatex")]
 	FormatNotSupportedByDmatex,
+	#[error("Staging buffer allocation failed: {0}")]
+	StagingBufferAllocationFailed(Validated<AllocateBufferError>),
+	#[error("Timeline copy failed: {0}")]
+	TimelineCopyFailed(rustix::io::Errno),
 }
 
 struct DmatexUpload {
@@ -193,64 +214,85 @@ fn dmatex_upload_task(mut receiver: mpsc::UnboundedReceiver<DmatexUpload>) {
 			tracing::error!("dmatex upload channel somehow closed");
 			break;
 		}
-		let mut cmd_buf = AutoCommandBufferBuilder::primary(
-			vk.cballoc.clone(),
-			vk.queue.queue_family_index(),
-			CommandBufferUsage::OneTimeSubmit,
-		)
-		.unwrap();
-		let mut semaphores = Vec::with_capacity(uploads.len());
-		for upload in uploads.iter() {
-			cmd_buf
-				.copy_buffer_to_image(CopyBufferToImageInfo::buffer_image(
-					upload.staging.clone(),
-					upload.tex.image.clone(),
-				))
-				.unwrap();
-			semaphores.push(Arc::new(
-				Semaphore::new(
-					vk.dev.clone(),
-					SemaphoreCreateInfo {
-						export_handle_types: ExternalSemaphoreHandleTypes::SYNC_FD,
-						..Default::default()
-					},
-				)
-				.unwrap(),
-			));
-		}
-		let buf = cmd_buf.build().unwrap();
-		vk.queue.with(|mut queue| unsafe {
-			queue
-				.submit(
-					&[SubmitInfo {
-						command_buffers: vec![CommandBufferSubmitInfo::new(buf)],
-						signal_semaphores: semaphores
-							.iter()
-							.cloned()
-							.map(SemaphoreSubmitInfo::new)
-							.collect(),
-						..Default::default()
-					}],
-					None,
-				)
-				.unwrap()
-		});
+		let semaphores = match submit_uploads(vk, &uploads) {
+			Ok(semaphores) => semaphores,
+			Err(e) => {
+				tracing::error!("failed to submit dmatex uploads: {e:#}");
+				for upload in uploads.drain(..) {
+					signal_acquire(&upload);
+				}
+				continue;
+			}
+		};
 		for (upload, semaphore) in uploads.drain(..).zip(semaphores.into_iter()) {
 			tokio::spawn(async move {
-				let fd =
-					unsafe { semaphore.export_fd(ExternalSemaphoreHandleType::SyncFd) }.unwrap();
-				upload
+				let fd = match unsafe { semaphore.export_fd(ExternalSemaphoreHandleType::SyncFd) } {
+					Ok(fd) => fd,
+					Err(e) => {
+						tracing::error!("failed to export upload semaphore: {e}");
+						signal_acquire(&upload);
+						return;
+					}
+				};
+				if let Err(e) = upload
 					.tex
 					.timeline
 					.import_sync_file_point(fd.as_fd(), upload.acquire)
-					.unwrap();
-				upload
-					.tex
-					.timeline
-					.wait_async(upload.acquire)
-					.unwrap()
-					.await;
+				{
+					tracing::error!("failed to import upload sync file: {e}");
+					signal_acquire(&upload);
+					return;
+				}
+				match upload.tex.timeline.wait_async(upload.acquire) {
+					Ok(wait) => wait.await,
+					Err(e) => tracing::error!("failed to wait for upload: {e}"),
+				}
 			});
 		}
+	}
+}
+
+fn submit_uploads(vk: &VkContext, uploads: &[DmatexUpload]) -> anyhow::Result<Vec<Arc<Semaphore>>> {
+	let mut cmd_buf = AutoCommandBufferBuilder::primary(
+		vk.cballoc.clone(),
+		vk.queue.queue_family_index(),
+		CommandBufferUsage::OneTimeSubmit,
+	)?;
+	let mut semaphores = Vec::with_capacity(uploads.len());
+	for upload in uploads.iter() {
+		cmd_buf.copy_buffer_to_image(CopyBufferToImageInfo::buffer_image(
+			upload.staging.clone(),
+			upload.tex.image.clone(),
+		))?;
+		semaphores.push(Arc::new(Semaphore::new(
+			vk.dev.clone(),
+			SemaphoreCreateInfo {
+				export_handle_types: ExternalSemaphoreHandleTypes::SYNC_FD,
+				..Default::default()
+			},
+		)?));
+	}
+	let buf = cmd_buf.build()?;
+	vk.queue.with(|mut queue| unsafe {
+		queue.submit(
+			&[SubmitInfo {
+				command_buffers: vec![CommandBufferSubmitInfo::new(buf)],
+				signal_semaphores: semaphores
+					.iter()
+					.cloned()
+					.map(SemaphoreSubmitInfo::new)
+					.collect(),
+				..Default::default()
+			}],
+			None,
+		)
+	})?;
+	Ok(semaphores)
+}
+
+/// shows a stale frame instead of leaving the panel waiting on this point forever
+fn signal_acquire(upload: &DmatexUpload) {
+	if let Err(e) = unsafe { upload.tex.timeline.signal(upload.acquire) } {
+		tracing::error!("failed to signal upload acquire point: {e}");
 	}
 }

@@ -219,7 +219,7 @@ impl WlRegistry for Registry {
 				tracing::info!("Binding seat with id {}", new_id.object_id);
 				let seat = Seat::new(client, new_id.object_id, new_id.version).await?;
 				let seat = client.insert(new_id.object_id, seat)?;
-				let _ = client.display().seat.set(seat.clone());
+				let _ = client.display()?.seat.set(seat.clone());
 
 				tracing::info!("Seat capabilities advertised");
 			}
@@ -236,7 +236,7 @@ impl WlRegistry for Registry {
 						version: new_id.version,
 					},
 				)?;
-				let _ = client.display().output.set(output.clone());
+				let _ = client.display()?.output.set(output.clone());
 				output.advertise_outputs(client).await?;
 			}
 			RegistryGlobals::DMABUF => {

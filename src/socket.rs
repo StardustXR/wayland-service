@@ -1,5 +1,6 @@
 use std::{
 	fs::{self, File, remove_file},
+	io,
 	path::{Path, PathBuf},
 	time::Duration,
 };
@@ -26,10 +27,9 @@ pub struct Wayland {
 }
 impl Wayland {
 	pub fn new(socket_path: &Path) -> WaylandResult<Self> {
-		let (socket_path, _lockfile, lock_path) = create_socket(socket_path)
-			.map_err(WaylandError::Io)
-			.unwrap();
-		let listener = waynest_server::Listener::new_with_path(&socket_path).unwrap();
+		let (socket_path, _lockfile, lock_path) = create_socket(socket_path)?;
+		let listener = waynest_server::Listener::new_with_path(&socket_path)
+			.map_err(|e| io::Error::other(e.to_string()))?;
 		let socket_path = listener.socket_path().to_path_buf();
 		let _abort_handle = tokio::spawn(
 			// || "Wayland socket accept loop",
@@ -69,24 +69,28 @@ impl Wayland {
 }
 impl Drop for Wayland {
 	fn drop(&mut self) {
-		let mut lock_name = self.socket_path.file_name().unwrap().to_os_string();
-		lock_name.push(".lock");
-		fs::remove_file(&self.socket_path).unwrap();
-		fs::remove_file(self.socket_path.with_file_name(lock_name)).unwrap();
+		for path in [&self.socket_path, &self.lock_path] {
+			if let Err(e) = fs::remove_file(path) {
+				tracing::error!("failed to remove {}: {e}", path.display());
+			}
+		}
 	}
 }
 
 fn create_socket(socket_path: &Path) -> std::io::Result<(PathBuf, File, PathBuf)> {
 	let socket_path = if socket_path.is_relative() {
 		directories::BaseDirs::new()
-			.unwrap()
-			.runtime_dir()
-			.unwrap()
+			.as_ref()
+			.and_then(|dirs| dirs.runtime_dir())
+			.ok_or_else(|| io::Error::other("no XDG_RUNTIME_DIR"))?
 			.join(socket_path)
 	} else {
 		socket_path.to_path_buf()
 	};
-	let mut lock_name = socket_path.file_name().unwrap().to_os_string();
+	let mut lock_name = socket_path
+		.file_name()
+		.ok_or_else(|| io::Error::other("wayland socket path has no file name"))?
+		.to_os_string();
 	lock_name.push(".lock");
 	let lock_path = socket_path.with_file_name(lock_name);
 	let lock_file = if lock_path.exists() {
@@ -168,7 +172,7 @@ impl WaylandClient {
 						.await
 					{
 						if let WaylandError::Fatal { object_id, code, message } = e {
-							client.display().error(&mut client, ObjectId::DISPLAY, object_id, code, message.to_string()).await?;
+							client.display()?.error(&mut client, ObjectId::DISPLAY, object_id, code, message.to_string()).await?;
 						}
 						tracing::error!(?msg_clone,"Wayland: {e}");
 						return Err(e);
@@ -192,8 +196,7 @@ impl WaylandClient {
 				for callback in callbacks {
 					callback.done(client, callback.0, ms).await?;
 					client
-						.get::<Display>(ObjectId::DISPLAY)
-						.unwrap()
+						.display()?
 						.delete_id(client, ObjectId::DISPLAY, callback.0.as_raw())
 						.await?;
 					client.remove(callback.0);
@@ -217,7 +220,7 @@ impl WaylandClient {
 				toplevel.reconfigure(client).await?;
 			}
 			Message::Seat(seat_message) => {
-				if let Some(seat) = client.get::<Display>(ObjectId::DISPLAY).unwrap().seat.get() {
+				if let Some(seat) = client.display()?.seat.get() {
 					seat.handle_message(client, seat_message).await?;
 				}
 			}

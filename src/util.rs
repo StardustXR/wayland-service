@@ -62,15 +62,13 @@ impl Deref for AbortOnDrop {
 }
 
 impl Client {
-	pub fn message_sink(&self) -> MessageSink {
-		self.get::<Display>(ObjectId::DISPLAY)
-			.unwrap()
-			.message_sink
-			.clone()
+	pub fn message_sink(&self) -> WaylandResult<MessageSink> {
+		Ok(self.display()?.message_sink.clone())
 	}
 
-	pub fn display(&self) -> Arc<Display> {
-		self.get::<Display>(ObjectId::DISPLAY).unwrap()
+	pub fn display(&self) -> WaylandResult<Arc<Display>> {
+		self.try_get::<Display>(ObjectId::DISPLAY)
+			.inspect_err(|_| tracing::error!("wayland client has no display"))
 	}
 
 	pub fn try_get<D: RequestDispatcher>(&self, id: ObjectId) -> WaylandResult<Arc<D>> {

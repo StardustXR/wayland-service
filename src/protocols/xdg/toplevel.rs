@@ -28,10 +28,9 @@ impl MappedInner {
 		toplevel: &Arc<Toplevel>,
 		at: SpatialRef,
 		auto_insert: bool,
-	) -> Self {
-		// TODO: error handling
-		let panel_item = PanelItemUi::create(at, seat, toplevel, auto_insert).await;
-		Self { panel_item }
+	) -> anyhow::Result<Self> {
+		let panel_item = PanelItemUi::create(at, seat, toplevel, auto_insert).await?;
+		Ok(Self { panel_item })
 	}
 }
 
@@ -214,7 +213,9 @@ impl XdgToplevel for Toplevel {
 		title: String,
 	) -> WaylandResult<()> {
 		if let Some(panel_item) = self.panel_item() {
-			_ = panel_item.panel_shell().toplevel_title(title.clone());
+			if let Some(shell) = panel_item.panel_shell() {
+				_ = shell.toplevel_title(title.clone());
+			}
 		}
 		self.data.lock().title.replace(title);
 		Ok(())
@@ -227,7 +228,9 @@ impl XdgToplevel for Toplevel {
 		app_id: String,
 	) -> WaylandResult<()> {
 		if let Some(panel_item) = self.panel_item() {
-			_ = panel_item.panel_shell().toplevel_app_id(app_id.clone());
+			if let Some(shell) = panel_item.panel_shell() {
+				_ = shell.toplevel_app_id(app_id.clone());
+			}
 		}
 		self.data.lock().app_id.replace(app_id);
 		Ok(())
@@ -280,7 +283,9 @@ impl XdgToplevel for Toplevel {
 		};
 		self.wl_surface().state_lock().pending.max_size = size;
 		if let Some(panel_item) = self.panel_item() {
-			_ = panel_item.panel_shell().toplevel_max_size(size);
+			if let Some(shell) = panel_item.panel_shell() {
+				_ = shell.toplevel_max_size(size);
+			}
 		}
 		Ok(())
 	}
@@ -299,7 +304,9 @@ impl XdgToplevel for Toplevel {
 		};
 		self.wl_surface().state_lock().pending.min_size = size;
 		if let Some(panel_item) = self.panel_item() {
-			_ = panel_item.panel_shell().toplevel_min_size(size);
+			if let Some(shell) = panel_item.panel_shell() {
+				_ = shell.toplevel_min_size(size);
+			}
 		}
 		Ok(())
 	}
@@ -328,7 +335,9 @@ impl XdgToplevel for Toplevel {
 	) -> WaylandResult<()> {
 		self.data.lock().fullscreen = true;
 		if let Some(panel_item) = self.panel_item() {
-			_ = panel_item.panel_shell().toplevel_fullscreen(true);
+			if let Some(shell) = panel_item.panel_shell() {
+				_ = shell.toplevel_fullscreen(true);
+			}
 		}
 		Ok(())
 	}
@@ -340,7 +349,9 @@ impl XdgToplevel for Toplevel {
 	) -> WaylandResult<()> {
 		self.data.lock().fullscreen = false;
 		if let Some(panel_item) = self.panel_item() {
-			_ = panel_item.panel_shell().toplevel_fullscreen(false);
+			if let Some(shell) = panel_item.panel_shell() {
+				_ = shell.toplevel_fullscreen(false);
+			}
 		}
 		Ok(())
 	}

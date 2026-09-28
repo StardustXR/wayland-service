@@ -1,7 +1,7 @@
 // use super::shm_buffer_backing::ShmBufferBacking;
 use crate::{
 	client::Client,
-	error::WaylandResult,
+	error::{WaylandError, WaylandResult},
 	protocols::core::{
 		buffer::{Buffer, BufferBacking},
 		shm_buffer_backing::ShmBufferBacking,
@@ -11,7 +11,7 @@ use memmap2::{MmapOptions, RemapOptions};
 use parking_lot::{Mutex, MutexGuard, RawMutex, lock_api::MappedMutexGuard};
 use std::os::fd::{AsRawFd, OwnedFd};
 use waynest::ObjectId;
-use waynest_protocols::server::core::wayland::wl_shm::Format;
+use waynest_protocols::server::core::wayland::wl_shm::{Error as ShmError, Format};
 pub use waynest_protocols::server::core::wayland::wl_shm_pool::*;
 use waynest_server::Client as _;
 
@@ -59,16 +59,31 @@ impl WlShmPool for ShmPool {
 		stride: i32,
 		format: Format,
 	) -> WaylandResult<()> {
+		let pool = client.try_get::<ShmPool>(sender_id)?;
+		let (w, h, o, st) = (width as i64, height as i64, offset as i64, stride as i64);
+		if w <= 0 || h <= 0 || o < 0 || st < w * 4 || o + st * h > pool.data_lock().len() as i64 {
+			return Err(WaylandError::Fatal {
+				object_id: sender_id,
+				code: ShmError::InvalidStride.into(),
+				message: "buffer doesn't fit in the shm pool",
+			});
+		}
 		let params = ShmBufferBacking::new(
-			client.get::<ShmPool>(sender_id).unwrap(),
+			pool,
 			offset as usize,
 			stride as usize,
 			[width as u64, height as u64].into(),
 			format,
 		)
 		.await
-		// TODO: properly handle errors
-		.unwrap();
+		.map_err(|e| {
+			tracing::error!("failed to create shm buffer: {e}");
+			WaylandError::Fatal {
+				object_id: sender_id,
+				code: ShmError::InvalidFormat.into(),
+				message: "failed to create shm buffer",
+			}
+		})?;
 
 		Buffer::new(client, id, BufferBacking::Shm(params))?;
 		Ok(())
@@ -83,6 +98,10 @@ impl WlShmPool for ShmPool {
 		size: i32,
 	) -> WaylandResult<()> {
 		let mut inner = self.inner.lock();
+		if size < 0 || (size as usize) < inner.len() {
+			tracing::error!("client tried to shrink shm pool, ignoring");
+			return Ok(());
+		}
 		unsafe { inner.remap(size as usize, RemapOptions::new().may_move(true))? };
 		Ok(())
 	}

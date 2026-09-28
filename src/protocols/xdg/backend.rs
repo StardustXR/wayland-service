@@ -84,7 +84,7 @@ impl XdgBackend {
 		item_acceptor: PanelItemAcceptor,
 		seat: &Arc<Seat>,
 		toplevel: &Arc<Toplevel>,
-	) -> Pin<Box<dyn Future<Output = Arc<Node<XdgBackend>>> + Send + Sync>> {
+	) -> Pin<Box<dyn Future<Output = Option<Arc<Node<XdgBackend>>>> + Send + Sync>> {
 		let seat = seat.clone();
 		let toplevel = toplevel.clone();
 		Box::pin(async move {
@@ -96,11 +96,18 @@ impl XdgBackend {
 				output_spatial: OnceLock::new(),
 				task: OnceLock::new(),
 			})
-			.unwrap();
+			.inspect_err(|e| tracing::error!("failed to create panel item node: {e}"))
+			.ok()?;
 			let obj = Arc::new(node);
-			let (shell, spatial_ref) = item_acceptor.accept(item_backend).await.unwrap();
-			obj.panel_shell.set(shell).unwrap();
-			obj.output_spatial.set(spatial_ref).unwrap();
+			let (shell, spatial_ref) = match item_acceptor.accept(item_backend).await {
+				Ok(accepted) => accepted,
+				Err(e) => {
+					tracing::error!("panel item acceptor failed to accept: {e}");
+					return None;
+				}
+			};
+			_ = obj.panel_shell.set(shell);
+			_ = obj.output_spatial.set(spatial_ref.clone());
 			tokio::spawn({
 				// A strong share, not a `Weak`: `death_notification` borrows the node
 				// across the await, so there has to be an owner here. That makes this
@@ -111,7 +118,7 @@ impl XdgBackend {
 				let obj = obj.clone();
 				let seat = obj.seat.clone();
 				let toplevel = obj.toplevel.clone();
-				let output_spatial = obj.output_spatial.get().unwrap().clone();
+				let output_spatial = spatial_ref;
 				let death_future = obj.death_notifier();
 				async move {
 					death_future.wait().await;
@@ -125,17 +132,23 @@ impl XdgBackend {
 						tracing::debug!("toplevel gone, nothing to switch panel shell for");
 						return;
 					};
-					let shell = PanelItemUi::create(output_spatial, &seat, &toplevel, false).await;
-					toplevel.switch_panel_shell(shell).await;
+					match PanelItemUi::create(output_spatial, &seat, &toplevel, false).await {
+						Ok(shell) => toplevel.switch_panel_shell(shell).await,
+						Err(e) => tracing::error!("failed to recreate panel item ui: {e:#}"),
+					}
 				}
 			});
 			if let Some(title) = toplevel.title() {
-				_ = obj.panel_shell().toplevel_title(title);
+				if let Some(shell) = obj.panel_shell() {
+					_ = shell.toplevel_title(title);
+				}
 			}
 			if let Some(app_id) = toplevel.app_id() {
-				_ = obj.panel_shell().toplevel_app_id(app_id);
+				if let Some(shell) = obj.panel_shell() {
+					_ = shell.toplevel_app_id(app_id);
+				}
 			}
-			obj
+			Some(obj)
 		})
 	}
 
@@ -160,8 +173,12 @@ impl XdgBackend {
 		toplevel
 	}
 
-	pub fn panel_shell(&self) -> &PanelShell {
-		self.panel_shell.get().unwrap()
+	pub fn panel_shell(&self) -> Option<&PanelShell> {
+		let shell = self.panel_shell.get();
+		if shell.is_none() {
+			tracing::error!("panel item backend used before it got a panel shell");
+		}
+		shell
 	}
 
 	fn surface_from_id(&self, id: &SurfaceId) -> Option<Arc<Surface>> {
@@ -181,7 +198,11 @@ impl XdgBackend {
 		self.children
 			.insert(id, (Arc::downgrade(surface), info.clone()));
 
-		self.panel_shell().create_child(info.clone()).unwrap();
+		if let Some(shell) = self.panel_shell()
+			&& let Err(e) = shell.create_child(info)
+		{
+			tracing::error!("failed to send child creation to panel shell: {e}");
+		}
 	}
 
 	pub fn reposition_child(&self, surface: &Arc<Surface>, geometry: Geometry) {
@@ -192,7 +213,11 @@ impl XdgBackend {
 		if let Some(mut child) = self.children.get_mut(id) {
 			child.1.geometry = geometry;
 		}
-		self.panel_shell().move_child(*id, geometry).unwrap();
+		if let Some(shell) = self.panel_shell()
+			&& let Err(e) = shell.move_child(*id, geometry)
+		{
+			tracing::error!("failed to send child move to panel shell: {e}");
+		}
 	}
 
 	pub fn update_child_z_order(&self, surface: &Arc<Surface>, z_order: i32) {
@@ -205,7 +230,11 @@ impl XdgBackend {
 			let info = child.1.clone();
 			drop(child);
 			// TODO: this seems very wrong, idk if we ever communicate the z order here
-			self.panel_shell().move_child(*id, info.geometry).unwrap();
+			if let Some(shell) = self.panel_shell()
+				&& let Err(e) = shell.move_child(*id, info.geometry)
+			{
+				tracing::error!("failed to send child z order to panel shell: {e}");
+			}
 		}
 	}
 
@@ -215,7 +244,11 @@ impl XdgBackend {
 		};
 		self.children.remove(id);
 
-		self.panel_shell().destroy_child(*id).unwrap();
+		if let Some(shell) = self.panel_shell()
+			&& let Err(e) = shell.destroy_child(*id)
+		{
+			tracing::error!("failed to send child destruction to panel shell: {e}");
+		}
 	}
 }
 impl PanelItemHandler for XdgBackend {

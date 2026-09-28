@@ -60,14 +60,21 @@ async fn main() {
 
 	let (client, _) = Client::connect(&[&project_local_resources!("data")])
 		.await
-		.unwrap();
+		.expect("failed to connect to the stardust server");
 	let client = Arc::new(client);
-	VkContext::init(&client).await;
+	VkContext::init(&client)
+		.await
+		.expect("failed to init vulkan");
 	_ = CLIENT.set(client.clone());
 
-	let _wayland = Wayland::new(&args.wayland_socket_path).unwrap();
+	let _wayland =
+		Wayland::new(&args.wayland_socket_path).expect("failed to create wayland socket");
 
-	_ = KEYMAP_STORE.set(KeymapStore::connect().await.unwrap());
+	_ = KEYMAP_STORE.set(
+		KeymapStore::connect()
+			.await
+			.expect("failed to connect to the keymap store"),
+	);
 
 	let server = client.server();
 

@@ -57,7 +57,7 @@ impl XdgPopup for Popup {
 		positioner: ObjectId,
 		token: u32,
 	) -> WaylandResult<()> {
-		let positioner = client.get::<Positioner>(positioner).unwrap();
+		let positioner = client.try_get::<Positioner>(positioner)?;
 		let positioner_data = positioner.data();
 		*self.positioner_data.lock() = positioner_data;
 		if self.version >= 5 {

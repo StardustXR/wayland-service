@@ -335,16 +335,18 @@ impl WlPointer for Pointer {
 		if let Some(focused_surface) = self.focused_surface.lock().await.upgrade()
 			&& let Some(panel_item) = focused_surface.panel_item()
 		{
-			panel_item
-				.panel_shell()
-				.set_cursor_visuals(surface.and_then(|s| client.get::<Surface>(s)).map(|s| {
-					let size = s.current_buffer_size().unwrap_or([16; 2].into());
-					Geometry {
-						origin: Vector2::from([hotspot_x, hotspot_y]),
-						size: Vector2::from([size.x as u32, size.y as u32]),
-					}
-				}))
-				.unwrap();
+			let geometry = surface.and_then(|s| client.get::<Surface>(s)).map(|s| {
+				let size = s.current_buffer_size().unwrap_or([16; 2].into());
+				Geometry {
+					origin: Vector2::from([hotspot_x, hotspot_y]),
+					size: Vector2::from([size.x as u32, size.y as u32]),
+				}
+			});
+			if let Some(shell) = panel_item.panel_shell()
+				&& let Err(e) = shell.set_cursor_visuals(geometry)
+			{
+				tracing::error!("failed to send cursor visuals to panel shell: {e}");
+			}
 		}
 		let Some(surface) = surface else {
 			return Ok(());

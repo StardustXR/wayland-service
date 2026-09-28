@@ -6,6 +6,7 @@ use std::{
 	},
 };
 
+use anyhow::Context;
 use glam::{Quat, Vec3};
 use gluon_ipc::{Handler, Interface, Node, RefExt, ToRef};
 use mint::{Vector2, Vector3};
@@ -71,7 +72,7 @@ impl ItemHandlerQuery {
 		ref_space: SpatialRef,
 		size: impl Into<Vector2<usize>>,
 		auto_insert: bool,
-	) -> Node<Self> {
+	) -> stardust_xr_fusion::Result<Node<Self>> {
 		let (node, query_handler) = PointsQueryHandler::new_node(Self {
 			toplevel,
 			seat,
@@ -79,8 +80,7 @@ impl ItemHandlerQuery {
 			handle: OnceLock::new(),
 			acceptor: RwLock::new(None),
 			auto_insert: AtomicBool::new(auto_insert),
-		})
-		.unwrap();
+		})?;
 		tracing::debug!("creating object: {:?}", query_handler.to_ref());
 		let handle = CLIENT
 			.wait()
@@ -94,11 +94,9 @@ impl ItemHandlerQuery {
 				reference_spatial: ref_space,
 				points: Self::get_points(size),
 			})
-			.await
-			.unwrap()
-			.unwrap();
-		node.handle.set(handle).unwrap();
-		node
+			.await??;
+		_ = node.handle.set(handle);
+		Ok(node)
 	}
 	fn get_points(size: impl Into<Vector2<usize>>) -> Vec<Point> {
 		let mut size = PanelItemUi::get_size(size);
@@ -145,7 +143,9 @@ impl ItemHandlerQuery {
 			return;
 		};
 		tracing::info!("connecting to new panel item acceptor");
-		let obj = XdgBackend::connect(acceptor, &seat, &toplevel).await;
+		let Some(obj) = XdgBackend::connect(acceptor, &seat, &toplevel).await else {
+			return;
+		};
 		toplevel.switch_panel_shell(obj).await;
 		self.replaced.store(true, Ordering::Relaxed);
 	}
@@ -278,20 +278,16 @@ impl PanelItemUi {
 		seat: &Arc<Seat>,
 		toplevel: &Arc<Toplevel>,
 		auto_insert: bool,
-	) -> Arc<Node<XdgBackend>> {
+	) -> anyhow::Result<Arc<Node<XdgBackend>>> {
 		let client = CLIENT.wait();
 		let size = toplevel
 			.wl_surface()
 			.current_buffer_size()
 			.unwrap_or([1, 1].into());
-		let (root, root_ref) = Spatial::new(client, &at, Transform::IDENTITY)
-			.await
-			.unwrap();
-		root.set_parent_in_place(client.root().clone()).unwrap();
+		let (root, root_ref) = Spatial::new(client, &at, Transform::IDENTITY).await?;
+		root.set_parent_in_place(client.root().clone())?;
 		let (field_spatial, field_spatial_ref) =
-			Spatial::new(client, &root_ref, Transform::IDENTITY)
-				.await
-				.unwrap();
+			Spatial::new(client, &root_ref, Transform::IDENTITY).await?;
 		let (field, _) = Field::new(
 			client,
 			&field_spatial,
@@ -299,8 +295,7 @@ impl PanelItemUi {
 				size: Self::get_size(size),
 			},
 		)
-		.await
-		.unwrap();
+		.await?;
 		let grabbable = Grabbable::new(
 			client,
 			root_ref.clone(),
@@ -313,18 +308,14 @@ impl PanelItemUi {
 				pointer_mode: PointerMode::Align,
 			},
 		)
-		.await
-		.unwrap();
-		field_spatial
-			.set_parent(grabbable.content_parent().spatial_ref().await.unwrap())
-			.unwrap();
+		.await?;
+		field_spatial.set_parent(grabbable.content_parent().spatial_ref().await?)?;
 		let (model_spatial, _) = Spatial::new(
 			client,
 			&field_spatial_ref,
 			Transform::from_scale(Self::get_size(size)),
 		)
-		.await
-		.unwrap();
+		.await?;
 		let model = Model::new(
 			client,
 			&model_spatial,
@@ -333,27 +324,24 @@ impl PanelItemUi {
 				path: "panel".into(),
 			},
 		)
-		.await
-		.unwrap();
-		let part = model.get_part("Panel").await.unwrap().unwrap();
+		.await?;
+		let part = model
+			.get_part("Panel")
+			.await?
+			.context("panel model has no Panel part")?;
 		let content_parent = grabbable.content_parent().clone();
-		let derezzable = Derezzable::new(client, content_parent.clone(), field.clone())
-			.await
-			.unwrap();
+		let derezzable = Derezzable::new(client, content_parent.clone(), field.clone()).await?;
 		let (poseable, poseable_proxy) = Poseable::new_node(PanelPoseable {
 			root: root_ref,
 			content_parent: content_parent.clone(),
 			pending: Mutex::new(None),
-		})
-		.unwrap();
-		let poseable_queryable = QueryableObject::new(client, content_parent, field.clone())
-			.await
-			.unwrap();
+		})?;
+		let poseable_queryable =
+			QueryableObject::new(client, content_parent, field.clone()).await?;
 		let poseable_interface =
 			QueryableExt::add_interface(&poseable_queryable, &Poseable::from(poseable_proxy))
-				.await
-				.unwrap();
-		let acceptor_indicator = Lines::new(client, &field_spatial, vec![]).await.unwrap();
+				.await?;
+		let acceptor_indicator = Lines::new(client, &field_spatial, vec![]).await?;
 		let query = ItemHandlerQuery::new(
 			Arc::downgrade(toplevel),
 			Arc::downgrade(seat),
@@ -361,7 +349,7 @@ impl PanelItemUi {
 			size,
 			auto_insert,
 		)
-		.await;
+		.await?;
 		let (panel_shell_handler, panel_shell) = PanelShell::new_node(Self {
 			root,
 			model,
@@ -376,14 +364,13 @@ impl PanelItemUi {
 			derezzable: Mutex::new(derezzable),
 			poseable,
 			_poseable_queryable: (poseable_queryable, poseable_interface),
-		})
-		.unwrap();
+		})?;
 		// The proxy is dropped: this panel item's shell is in-process, so nothing
 		// remote ever reaches the backend and it is only ever used through its
 		// handler. Capturing into an acceptor builds a fresh node in
 		// `XdgBackend::connect` and hands *that* proxy out.
 		let (backend, _backend_proxy) =
-			PanelItem::new_node(XdgBackend::new(seat, toplevel, panel_shell.into(), at)).unwrap();
+			PanelItem::new_node(XdgBackend::new(seat, toplevel, panel_shell.into(), at))?;
 		let input_task = tokio::spawn({
 			let obj = Arc::downgrade(&panel_shell_handler);
 			async move {
@@ -419,7 +406,7 @@ impl PanelItemUi {
 				panel_shell_handler.root.to_ref()
 			);
 		});
-		Arc::new(backend)
+		Ok(Arc::new(backend))
 	}
 	async fn update_input(&self, frame_info: FrameInfo) {
 		let mut grabbable = self.grabbable.write().await;
@@ -513,7 +500,8 @@ impl PanelShellHandler for PanelItemUi {
 			.part
 			.set_material_parameter("unlit", MaterialParameter::Bool { value: true })
 			.await;
-		self.part
+		if let Err(e) = self
+			.part
 			.set_material_parameter(
 				"diffuse",
 				MaterialParameter::Dmatex {
@@ -523,7 +511,9 @@ impl PanelShellHandler for PanelItemUi {
 				},
 			)
 			.await
-			.unwrap();
+		{
+			tracing::error!("failed to set panel dmatex: {e}");
+		}
 	}
 
 	async fn toplevel_resized(&self, _ctx: gluon_ipc::Context, new_size: Size2) {

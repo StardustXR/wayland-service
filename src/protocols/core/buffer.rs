@@ -41,13 +41,13 @@ impl Buffer {
 			Self {
 				id,
 				backing,
-				message_sink: client.message_sink(),
+				message_sink: client.message_sink()?,
 			},
 		)?)
 	}
 
 	/// returns (dmatex_uid, server_acquire_point, server_release_point)
-	pub fn update(self: &Arc<Self>) -> BufferSubmit {
+	pub fn update(self: &Arc<Self>) -> Option<BufferSubmit> {
 		let (dmatex, acquire, release) = match &self.backing {
 			BufferBacking::Dmabuf(backing) => backing.update(),
 			BufferBacking::Shm(backing) => backing.update(),
@@ -57,13 +57,13 @@ impl Buffer {
 			BufferBacking::Shm(backing) => backing.timeline(),
 		};
 		let release_task = self.release_task(timeline.clone(), release);
-		BufferSubmit {
+		Some(BufferSubmit {
 			dmatex,
 			acquire,
-			release: SignalOnDrop::new(timeline, release),
+			release: SignalOnDrop::new(timeline, release)?,
 			release_task,
 			buffer: self.clone(),
-		}
+		})
 	}
 
 	pub fn is_transparent(&self) -> bool {
@@ -95,7 +95,12 @@ impl Buffer {
 					tracing::warn!("buffer not released for 500ms");
 				})
 				.into();
-				timeline.wait_async(release).unwrap().await;
+				match timeline.wait_async(release) {
+					Ok(wait) => wait.await,
+					Err(e) => {
+						tracing::error!("failed to wait for buffer release, releasing now: {e}")
+					}
+				}
 				tracing::trace!("sending buffer release");
 				message_sink.send(crate::client::Message::ReleaseBuffer(buffer))
 			}
@@ -112,20 +117,20 @@ pub struct BufferSubmit {
 	buffer: Arc<Buffer>,
 }
 impl BufferSubmit {
-	pub fn reapply(self) -> BufferSubmit {
+	pub fn reapply(self) -> Option<BufferSubmit> {
 		let new_release = self.buffer.new_timeline_point();
 		self.release_task.abort();
 		let release_task = self
 			.buffer
 			.release_task(self.release.timeline().clone(), new_release);
-		let release = SignalOnDrop::new(self.release.timeline().clone(), new_release);
-		BufferSubmit {
+		let release = SignalOnDrop::new(self.release.timeline().clone(), new_release)?;
+		Some(BufferSubmit {
 			dmatex: self.dmatex,
 			acquire: self.acquire,
 			release,
 			release_task,
 			buffer: self.buffer,
-		}
+		})
 	}
 	pub fn dmatex(&self) -> DmatexRef {
 		self.dmatex.clone()

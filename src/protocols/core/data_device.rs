@@ -4,7 +4,7 @@ use crate::{
 };
 use std::{
 	os::fd::{AsFd, OwnedFd},
-	sync::{Arc, Mutex},
+	sync::{Arc, Mutex, MutexGuard},
 };
 use waynest::ObjectId;
 use waynest_protocols::server::core::wayland::{
@@ -45,8 +45,15 @@ struct ClipboardSelection {
 /// The current clipboard contents, set by the last client to call set_selection.
 static CLIPBOARD: Mutex<Option<ClipboardSelection>> = Mutex::new(None);
 
+fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+	m.lock().unwrap_or_else(|e| {
+		tracing::error!("clipboard mutex poisoned, recovering");
+		e.into_inner()
+	})
+}
+
 pub fn register_client(sink: MessageSink) {
-	CLIENTS.lock().unwrap().push(sink);
+	lock(&CLIENTS).push(sink);
 }
 
 #[derive(Debug, waynest_server::RequestDispatcher)]
@@ -79,11 +86,11 @@ impl WlDataDeviceManager for DataDeviceManager {
 		_seat: ObjectId,
 	) -> WaylandResult<()> {
 		client.insert(id, DataDevice { id })?;
-		let _ = client.display().data_device.set(id);
+		let _ = client.display()?.data_device.set(id);
 
 		// If a clipboard selection already exists, hand this brand-new device an offer
 		// for it immediately, otherwise it'd never find out about the current selection.
-		let existing = CLIPBOARD.lock().unwrap().as_ref().map(|selection| {
+		let existing = lock(&CLIPBOARD).as_ref().map(|selection| {
 			(
 				selection.source.clone(),
 				selection.mime_types.clone(),
@@ -113,7 +120,7 @@ impl WlDataSource for DataSource {
 		_sender_id: ObjectId,
 		mime_type: String,
 	) -> WaylandResult<()> {
-		self.mime_types.lock().unwrap().push(mime_type);
+		lock(&self.mime_types).push(mime_type);
 		Ok(())
 	}
 
@@ -166,20 +173,20 @@ impl WlDataDevice for DataDevice {
 	) -> WaylandResult<()> {
 		let Some(source_id) = source else {
 			// TODO: doesn't notify anyone that the selection was cleared.
-			*CLIPBOARD.lock().unwrap() = None;
+			*lock(&CLIPBOARD) = None;
 			return Ok(());
 		};
 		let source = client.try_get::<DataSource>(source_id)?;
-		let mime_types = source.mime_types.lock().unwrap().clone();
-		let owner = client.message_sink();
+		let mime_types = lock(&source.mime_types).clone();
+		let owner = client.message_sink()?;
 
-		*CLIPBOARD.lock().unwrap() = Some(ClipboardSelection {
+		*lock(&CLIPBOARD) = Some(ClipboardSelection {
 			source: source.clone(),
 			mime_types: mime_types.clone(),
 			owner: owner.clone(),
 		});
 
-		for sink in CLIENTS.lock().unwrap().iter() {
+		for sink in lock(&CLIENTS).iter() {
 			let _ = sink.send(Message::ClipboardSelection {
 				source: source.clone(),
 				mime_types: mime_types.clone(),
@@ -212,7 +219,7 @@ async fn offer_selection(
 	owner: MessageSink,
 ) -> WaylandResult<()> {
 	let device = client.try_get::<DataDevice>(device_id)?;
-	let offer_id = client.display().next_server_id();
+	let offer_id = client.display()?.next_server_id();
 	let offer = client.insert(
 		offer_id,
 		DataOffer {
@@ -240,7 +247,7 @@ pub async fn handle_message(client: &mut Client, message: Message) -> WaylandRes
 			mime_types,
 			owner,
 		} => {
-			let device_id = client.display().data_device.get().copied();
+			let device_id = client.display()?.data_device.get().copied();
 			if let Some(device_id) = device_id {
 				offer_selection(client, device_id, source, mime_types, owner).await?;
 			}
@@ -254,7 +261,7 @@ pub async fn handle_message(client: &mut Client, message: Message) -> WaylandRes
 				.send(client, source.id, mime_type, fd.as_fd())
 				.await?;
 		}
-		_ => unreachable!("handle_message only called for clipboard messages"),
+		_ => tracing::error!("non-clipboard message sent to the clipboard handler"),
 	}
 	Ok(())
 }

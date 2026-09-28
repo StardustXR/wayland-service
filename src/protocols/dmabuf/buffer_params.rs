@@ -128,18 +128,19 @@ impl ZwpLinuxBufferParamsV1 for BufferParams {
 		tracing::info!("Creating buffer from BufferParams {:?}", self.id);
 		// Create the buffer with DMA-BUF backing using self as the backing
 		let size = [width as u32, height as u32].into();
-		let buffer = DmabufBacking::from_params(
-			client.get::<Self>(self.id).unwrap(),
-			size,
-			DrmFourcc::try_from(format).unwrap(),
-			flags,
-		)
-		.await
-		.inspect_err(|e| tracing::error!("Failed to import dmabuf because {e}"))
-		.map(|backing| {
-			let id = client.display().next_server_id();
-			Buffer::new(client, id, BufferBacking::Dmabuf(backing))
-		});
+		let Ok(format) = DrmFourcc::try_from(format) else {
+			tracing::error!("client used unknown dmabuf format {format:#x}");
+			client.remove(self.id);
+			return self.failed(client, self.id).await;
+		};
+		let buffer =
+			DmabufBacking::from_params(client.try_get::<Self>(self.id)?, size, format, flags)
+				.await
+				.inspect_err(|e| tracing::error!("Failed to import dmabuf because {e}"))
+				.map(|backing| {
+					let id = client.display()?.next_server_id();
+					Buffer::new(client, id, BufferBacking::Dmabuf(backing))
+				});
 
 		match buffer {
 			Ok(buffer) => self.created(client, self.id, buffer?.id).await,
@@ -161,11 +162,16 @@ impl ZwpLinuxBufferParamsV1 for BufferParams {
 		format: u32,
 		flags: Flags,
 	) -> WaylandResult<()> {
+		let format = DrmFourcc::try_from(format).map_err(|_| WaylandError::Fatal {
+			object_id: self.id,
+			code: Error::InvalidFormat.into(),
+			message: "unknown dmabuf format",
+		})?;
 		// Create the buffer with DMA-BUF backing using self as the backing
 		match DmabufBacking::from_params(
-			client.get::<Self>(self.id).unwrap(),
+			client.try_get::<Self>(self.id)?,
 			[width as u32, height as u32].into(),
-			DrmFourcc::try_from(format).unwrap(),
+			format,
 			flags,
 		)
 		.await

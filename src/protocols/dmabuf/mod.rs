@@ -42,7 +42,7 @@ impl Dmabuf {
 		let vk = VK.wait();
 		let formats = DmatexFormat::enumerate(sd_client, &vk.render_dev)
 			.await
-			.unwrap()
+			.inspect_err(|e| tracing::error!("failed to enumerate dmatex formats: {e}"))?
 			.values()
 			// we really need something more efficient than this lol
 			.filter(|f| format!("{:?}", f.vk_format()).contains("SRGB"))
@@ -115,8 +115,7 @@ impl ZwpLinuxDmabufV1 for Dmabuf {
 			});
 		}
 		// Create feedback object for default (non-surface-specific) settings
-		let feedback =
-			client.insert(id, DmabufFeedback(client.get::<Dmabuf>(sender_id).unwrap()))?;
+		let feedback = client.insert(id, DmabufFeedback(client.try_get::<Dmabuf>(sender_id)?))?;
 		feedback.send_params(client, id).await?;
 		Ok(())
 	}

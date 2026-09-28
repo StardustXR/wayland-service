@@ -1,3 +1,4 @@
+use anyhow::Context;
 use std::sync::{Arc, OnceLock};
 
 use stardust_xr_cme::{dmatex::Dmatex, render_device::RenderDevice};
@@ -30,10 +31,9 @@ pub struct VkContext {
 }
 pub static VK: OnceLock<VkContext> = OnceLock::new();
 impl VkContext {
-	// TODO: proper error handling?
-	pub async fn init(client: &Arc<Client<impl ClientHandler>>) {
-		let render_dev = RenderDevice::primary_server_device(client).await.unwrap();
-		let entry = VulkanLibrary::new().unwrap();
+	pub async fn init(client: &Arc<Client<impl ClientHandler>>) -> anyhow::Result<()> {
+		let render_dev = RenderDevice::primary_server_device(client).await?;
+		let entry = VulkanLibrary::new()?;
 		let debug_callback = unsafe { DebugUtilsMessengerCallback::new(debug_callback) };
 		let instance = Instance::new(
 			entry,
@@ -48,9 +48,8 @@ impl VkContext {
 				)],
 				..Default::default()
 			},
-		)
-		.unwrap();
-		let phys_dev = render_dev.get_physical_device(&instance).unwrap();
+		)?;
+		let phys_dev = render_dev.get_physical_device(&instance)?;
 
 		let queue_family_index = phys_dev
 			.queue_family_properties()
@@ -60,7 +59,7 @@ impl VkContext {
 				p.queue_flags.contains(QueueFlags::TRANSFER)
 					&& !p.queue_flags.contains(QueueFlags::PROTECTED)
 			})
-			.unwrap()
+			.context("no transfer queue family")?
 			.0 as u32;
 		let (dev, mut queues) = Device::new(
 			phys_dev.clone(),
@@ -73,9 +72,8 @@ impl VkContext {
 				enabled_features: Dmatex::required_device_features(),
 				..Default::default()
 			},
-		)
-		.unwrap();
-		let queue = queues.next().unwrap();
+		)?;
+		let queue = queues.next().context("device has no queues")?;
 		let cballoc = Arc::new(StandardCommandBufferAllocator::new(
 			dev.clone(),
 			Default::default(),
@@ -90,6 +88,7 @@ impl VkContext {
 			cballoc,
 			mem_alloc,
 		});
+		Ok(())
 	}
 	pub fn get() -> &'static Self {
 		VK.wait()

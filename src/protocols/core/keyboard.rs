@@ -146,7 +146,7 @@ impl Keyboard {
 			client,
 			self.id,
 			serial,
-			client.display().creation_time.elapsed().as_millis() as u32, // time
+			client.display()?.creation_time.elapsed().as_millis() as u32, // time
 			key,
 			if pressed {
 				KeyState::Pressed
