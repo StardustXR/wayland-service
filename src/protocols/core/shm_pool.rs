@@ -72,10 +72,9 @@ impl WlShmPool for ShmPool {
 			pool,
 			offset as usize,
 			stride as usize,
-			[width as u64, height as u64].into(),
+			[width as u32, height as u32].into(),
 			format,
 		)
-		.await
 		.map_err(|e| {
 			tracing::error!("failed to create shm buffer: {e}");
 			WaylandError::Fatal {

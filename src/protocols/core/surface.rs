@@ -4,7 +4,10 @@ use crate::{
 	error::{WaylandError, WaylandResult},
 	frame_dispatcher::FRAME_EVENT_PROVIDER,
 	protocols::{
-		core::buffer::BufferSubmit,
+		core::{
+			buffer::BufferSubmit,
+			shm_buffer_backing::{Rect, ShmTextures},
+		},
 		presentation::{MonotonicTimestamp, PresentationFeedback},
 		xdg::{backend::XdgBackend, toplevel::Toplevel},
 	},
@@ -56,6 +59,11 @@ pub struct SurfaceState {
 	pub min_size: Option<Vector2<u32>>,
 	pub max_size: Option<Vector2<u32>>,
 	frame_callbacks: Vec<Arc<Callback>>,
+
+	attached: bool,
+	/// x, y, w, h
+	surface_damage: Vec<[i32; 4]>,
+	buffer_damage: Vec<[i32; 4]>,
 }
 impl Default for SurfaceState {
 	fn default() -> Self {
@@ -66,6 +74,9 @@ impl Default for SurfaceState {
 			min_size: None,
 			max_size: None,
 			frame_callbacks: Vec::new(),
+			attached: false,
+			surface_damage: Vec::new(),
+			buffer_damage: Vec::new(),
 		}
 	}
 }
@@ -77,6 +88,9 @@ impl BufferedState for SurfaceState {
 		self.min_size = pending.min_size;
 		self.max_size = pending.max_size;
 		self.frame_callbacks.append(&mut pending.frame_callbacks);
+		self.attached |= std::mem::take(&mut pending.attached);
+		self.surface_damage.append(&mut pending.surface_damage);
+		self.buffer_damage.append(&mut pending.buffer_damage);
 	}
 
 	fn get_initial_pending(&self) -> Self {
@@ -87,6 +101,9 @@ impl BufferedState for SurfaceState {
 			min_size: self.min_size,
 			max_size: self.max_size,
 			frame_callbacks: Vec::new(),
+			attached: false,
+			surface_damage: Vec::new(),
+			buffer_damage: Vec::new(),
 		}
 	}
 }
@@ -123,6 +140,7 @@ pub struct Surface {
 	/// used to store unapplied surface updates, so they can be applied later
 	buffered_surface_update: Mutex<Option<BufferSubmit>>,
 	current_buffer_submit: Mutex<Option<BufferSubmit>>,
+	shm_textures: Mutex<Option<Arc<ShmTextures>>>,
 	// TODO: make this async
 	pub toplevel: RwLock<Weak<Toplevel>>,
 }
@@ -168,6 +186,7 @@ impl Surface {
 				toplevel: RwLock::new(Weak::new()),
 				buffered_surface_update: Mutex::new(None),
 				current_buffer_submit: Mutex::new(None),
+				shm_textures: Mutex::new(None),
 			}
 		});
 		surface.add_updated_current_state_handler(|surface| {
@@ -417,9 +436,40 @@ impl Surface {
 }
 impl Surface {
 	pub(super) fn buffer_update(&self) {
-		if let Some(buffer) = self.state.lock().current().buffer.as_ref()
-			&& let Some(submit) = buffer.update()
-		{
+		let (buffer, damage) = {
+			let mut state = self.state.lock();
+			let current = &mut state.current;
+			let attached = std::mem::take(&mut current.attached);
+			let surface_damage = std::mem::take(&mut current.surface_damage);
+			let buffer_damage = std::mem::take(&mut current.buffer_damage);
+			let Some(buffer) = current.buffer.clone() else {
+				return;
+			};
+			// shm contents are only ours to read right after an attach, the buffer gets
+			// released straight away
+			if buffer.shm().is_some() && !attached {
+				return;
+			}
+			let size = buffer.size();
+			let size = Vector2::from([size.x as u32, size.y as u32]);
+			let scale = current.density.max(1.0) as i32;
+			let damage = surface_damage
+				.into_iter()
+				.map(|[x, y, w, h]| {
+					[
+						x.saturating_mul(scale),
+						y.saturating_mul(scale),
+						w.saturating_mul(scale),
+						h.saturating_mul(scale),
+					]
+				})
+				.chain(buffer_damage)
+				.filter_map(|[x, y, w, h]| Rect::clamped(x, y, w, h, size))
+				.collect::<Vec<_>>();
+			(buffer, damage)
+		};
+		let shm_textures = self.shm_textures.lock().clone();
+		if let Some(submit) = buffer.update(shm_textures.as_deref(), &damage) {
 			if let Some(panel_item) = self.panel_item()
 				&& let Some(surface_id) = self.surface_id.get()
 			{
@@ -429,7 +479,7 @@ impl Surface {
 						submit.dmatex(),
 						submit.acquire(),
 						submit.release(),
-						!buffer.is_transparent(),
+						submit.opaque(),
 					) {
 					tracing::error!("failed to send surface update to panel shell: {e}");
 				}
@@ -451,7 +501,7 @@ impl Surface {
 					submit.dmatex(),
 					submit.acquire(),
 					submit.release(),
-					!submit.buffer().is_transparent(),
+					submit.opaque(),
 				) {
 				tracing::error!("failed to send surface update to panel shell: {e}");
 			}
@@ -473,7 +523,7 @@ impl Surface {
 						submit.dmatex(),
 						submit.acquire(),
 						submit.release(),
-						!submit.buffer().is_transparent(),
+						submit.opaque(),
 					) {
 					tracing::error!("failed to send surface update to panel shell: {e}");
 				}
@@ -490,6 +540,16 @@ impl Surface {
 
 	#[tracing::instrument(level = "debug", skip_all)]
 	fn frame_event(&self) {
+		// a shell that isn't taking submits can't release anything either, so don't let
+		// clients draw ahead of it
+		if self
+			.current_buffer_submit
+			.lock()
+			.as_ref()
+			.is_some_and(|s| !s.consumed())
+		{
+			return;
+		}
 		let callbacks = std::mem::take(&mut self.state_lock().current.frame_callbacks);
 		if !callbacks.is_empty() {
 			let _ = self.message_sink.send(Message::Frame(callbacks));
@@ -525,10 +585,12 @@ impl WlSurface for Surface {
 		_x: i32,
 		_y: i32,
 	) -> WaylandResult<()> {
-		self.state.lock().pending.buffer = buffer.and_then(|b| {
+		let mut state = self.state.lock();
+		state.pending.buffer = buffer.and_then(|b| {
 			let buffer = client.get::<Buffer>(b)?;
 			Some(buffer)
 		});
+		state.pending.attached = true;
 		Ok(())
 	}
 
@@ -538,11 +600,16 @@ impl WlSurface for Surface {
 		&self,
 		_client: &mut Self::Connection,
 		_sender_id: ObjectId,
-		_x: i32,
-		_y: i32,
-		_width: i32,
-		_height: i32,
+		x: i32,
+		y: i32,
+		width: i32,
+		height: i32,
 	) -> WaylandResult<()> {
+		self.state
+			.lock()
+			.pending
+			.surface_damage
+			.push([x, y, width, height]);
 		Ok(())
 	}
 
@@ -591,6 +658,28 @@ impl WlSurface for Surface {
 		_sender_id: ObjectId,
 	) -> WaylandResult<()> {
 		tracing::trace!("commit started");
+		let shm_size = {
+			let state = self.state.lock();
+			state
+				.pending
+				.buffer
+				.as_ref()
+				.filter(|_| state.pending.attached)
+				.and_then(|b| b.shm())
+				.map(|b| b.size())
+		};
+		if let Some(size) = shm_size.map(|s| Vector2::from([s.x as u32, s.y as u32]))
+			&& !self
+				.shm_textures
+				.lock()
+				.as_ref()
+				.is_some_and(|t| t.size() == size)
+		{
+			match ShmTextures::new(size).await {
+				Ok(textures) => *self.shm_textures.lock() = Some(Arc::new(textures)),
+				Err(e) => tracing::error!("failed to create shm textures: {e}"),
+			}
+		}
 		self.on_commit();
 
 		tracing::trace!("commit done");
@@ -627,11 +716,16 @@ impl WlSurface for Surface {
 		&self,
 		_client: &mut Self::Connection,
 		_sender_id: ObjectId,
-		_x: i32,
-		_y: i32,
-		_width: i32,
-		_height: i32,
+		x: i32,
+		y: i32,
+		width: i32,
+		height: i32,
 	) -> WaylandResult<()> {
+		self.state
+			.lock()
+			.pending
+			.buffer_damage
+			.push([x, y, width, height]);
 		Ok(())
 	}
 

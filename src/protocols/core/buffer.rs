@@ -1,6 +1,6 @@
 use crate::client::{Client, MessageSink};
 use crate::error::WaylandResult;
-use crate::protocols::core::shm_buffer_backing::ShmBufferBacking;
+use crate::protocols::core::shm_buffer_backing::{Rect, ShmBufferBacking, ShmTexture, ShmTextures};
 use crate::protocols::dmabuf::buffer_backing::DmabufBacking;
 use crate::signal_on_drop::SignalOnDrop;
 use crate::util::AbortOnDrop;
@@ -46,24 +46,45 @@ impl Buffer {
 		)?)
 	}
 
-	/// returns (dmatex_uid, server_acquire_point, server_release_point)
-	pub fn update(self: &Arc<Self>) -> Option<BufferSubmit> {
-		let (dmatex, acquire, release) = match &self.backing {
-			BufferBacking::Dmabuf(backing) => backing.update(),
-			BufferBacking::Shm(backing) => backing.update(),
-		};
-		let timeline = match &self.backing {
-			BufferBacking::Dmabuf(backing) => backing.timeline(),
-			BufferBacking::Shm(backing) => backing.timeline(),
-		};
-		let release_task = self.release_task(timeline.clone(), release);
-		Some(BufferSubmit {
-			dmatex,
-			acquire,
-			release: SignalOnDrop::new(timeline, release)?,
-			release_task,
-			buffer: self.clone(),
-		})
+	pub fn update(self: &Arc<Self>, shm: Option<&ShmTextures>, damage: &[Rect]) -> Option<BufferSubmit> {
+		match &self.backing {
+			BufferBacking::Dmabuf(backing) => {
+				let (dmatex, acquire, release) = backing.update();
+				let timeline = backing.timeline();
+				let release_task = self.release_task(timeline.clone(), release);
+				Some(BufferSubmit {
+					dmatex,
+					acquire,
+					release: SignalOnDrop::new(timeline, release)?,
+					opaque: !backing.is_transparent(),
+					source: SubmitSource::Dmabuf {
+						buffer: self.clone(),
+						release_task,
+					},
+				})
+			}
+			BufferBacking::Shm(backing) => {
+				let update = shm.and_then(|textures| textures.update(backing, damage));
+				let _ = self
+					.message_sink
+					.send(crate::client::Message::ReleaseBuffer(self.clone()));
+				let (tex, acquire, release) = update?;
+				Some(BufferSubmit {
+					dmatex: tex.dmatex.dmatex.clone(),
+					acquire,
+					release: SignalOnDrop::new(tex.timeline.clone(), release)?,
+					opaque: !backing.is_transparent(),
+					source: SubmitSource::Shm(tex),
+				})
+			}
+		}
+	}
+
+	pub fn shm(&self) -> Option<&ShmBufferBacking> {
+		match &self.backing {
+			BufferBacking::Shm(backing) => Some(backing),
+			BufferBacking::Dmabuf(_) => None,
+		}
 	}
 
 	pub fn is_transparent(&self) -> bool {
@@ -81,7 +102,7 @@ impl Buffer {
 	}
 	fn new_timeline_point(&self) -> u64 {
 		match &self.backing {
-			BufferBacking::Shm(backing) => backing.new_timeline_point(),
+			BufferBacking::Shm(_) => unreachable!("shm submits get their points from ShmTextures"),
 			BufferBacking::Dmabuf(backing) => backing.new_timeline_point(),
 		}
 	}
@@ -108,28 +129,48 @@ impl Buffer {
 		.abort_handle()
 	}
 }
+enum SubmitSource {
+	Dmabuf {
+		buffer: Arc<Buffer>,
+		// this is explicitly not an AbortOnDrop, we only want to abort it in some rare cases
+		release_task: AbortHandle,
+	},
+	Shm(Arc<ShmTexture>),
+}
 pub struct BufferSubmit {
 	dmatex: DmatexRef,
 	acquire: u64,
 	release: DmatexSubmitReleaseLocal<SignalOnDrop>,
-	// this is explicitly not an AbortOnDrop, we only want to abort it in some rare cases
-	release_task: AbortHandle,
-	buffer: Arc<Buffer>,
+	opaque: bool,
+	source: SubmitSource,
 }
 impl BufferSubmit {
 	pub fn reapply(self) -> Option<BufferSubmit> {
-		let new_release = self.buffer.new_timeline_point();
-		self.release_task.abort();
-		let release_task = self
-			.buffer
-			.release_task(self.release.timeline().clone(), new_release);
-		let release = SignalOnDrop::new(self.release.timeline().clone(), new_release)?;
+		let timeline = self.release.timeline().clone();
+		let (new_release, source) = match self.source {
+			SubmitSource::Dmabuf {
+				buffer,
+				release_task,
+			} => {
+				let new_release = buffer.new_timeline_point();
+				release_task.abort();
+				let release_task = buffer.release_task(timeline.clone(), new_release);
+				(
+					new_release,
+					SubmitSource::Dmabuf {
+						buffer,
+						release_task,
+					},
+				)
+			}
+			SubmitSource::Shm(tex) => (tex.new_timeline_point(), SubmitSource::Shm(tex)),
+		};
 		Some(BufferSubmit {
 			dmatex: self.dmatex,
 			acquire: self.acquire,
-			release,
-			release_task,
-			buffer: self.buffer,
+			release: SignalOnDrop::new(timeline, new_release)?,
+			opaque: self.opaque,
+			source,
 		})
 	}
 	pub fn dmatex(&self) -> DmatexRef {
@@ -141,8 +182,11 @@ impl BufferSubmit {
 	pub fn release(&self) -> DmatexSubmitRelease {
 		self.release.proxy().clone()
 	}
-	pub fn buffer(&self) -> &Arc<Buffer> {
-		&self.buffer
+	pub fn consumed(&self) -> bool {
+		self.release.consumed()
+	}
+	pub fn opaque(&self) -> bool {
+		self.opaque
 	}
 }
 

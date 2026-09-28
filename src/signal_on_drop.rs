@@ -36,6 +36,9 @@ impl SignalOnDrop {
 	pub fn timeline(&self) -> &Arc<TimelineSyncObj> {
 		&self.timeline
 	}
+	pub fn consumed(&self) -> bool {
+		self.consumed.load(Ordering::Relaxed)
+	}
 }
 
 impl DmatexSubmitReleaseHandler for SignalOnDrop {
