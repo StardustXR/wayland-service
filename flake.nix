@@ -29,8 +29,17 @@
           default = craneLib.buildPackage {
             src = ./.;
             cargoLock = ./Cargo.lock;
+            # also build display-socket-finder
+            cargoExtraArgs = "--locked --workspace";
 
             buildInputs = [ pkgs.libxcb ];
+
+            # vulkano dlopens libvulkan (guarded since crane's deps-only build runs this too)
+            postFixup = ''
+              if [ -e $out/bin/stardust-xr-wayland-service ]; then
+                patchelf $out/bin/stardust-xr-wayland-service --add-rpath ${pkgs.vulkan-loader}/lib
+              fi
+            '';
 
             STARDUST_RES_PREFIXES = pkgs.stdenvNoCC.mkDerivation {
               name = "data";
