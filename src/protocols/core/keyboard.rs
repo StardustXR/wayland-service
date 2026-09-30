@@ -25,7 +25,7 @@ pub struct Keyboard {
 	focused_surface: Mutex<Weak<Surface>>,
 	pressed_keys: DashMap<ObjectId, DashSet<u32>>,
 	// TODO: maybe just store a hash here to not keep the handle alive?
-	current_keymap_id: RwLock<Option<Keymap>>,
+	current_keymap_id: RwLock<Option<u64>>,
 }
 
 impl Keyboard {
@@ -71,19 +71,23 @@ impl Keyboard {
 		pressed: bool,
 		modifier_state: ModifierState,
 	) -> WaylandResult<()> {
+		let Ok(Some(keymap_id)) = KEYMAP_STORE.wait().get_keymap_id(keymap.clone()).await else {
+			tracing::warn!("invalid keymap");
+			return Ok(());
+		};
 		if self
 			.current_keymap_id
 			.read()
 			.await
 			.as_ref()
-			.is_none_or(|v| v != &keymap)
+			.is_none_or(|v| v != &keymap_id)
 		{
 			let Ok(Some(fd)) = KEYMAP_STORE.wait().get(keymap.clone()).await else {
 				return Ok(());
 			};
 			self.keymap(client, self.id, KeymapFormat::XkbV1, fd.fd.as_fd(), fd.size)
 				.await?;
-			self.current_keymap_id.write().await.replace(keymap);
+			self.current_keymap_id.write().await.replace(keymap_id);
 		};
 
 		// PRESSED KEYS UPDATE

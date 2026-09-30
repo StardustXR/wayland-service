@@ -302,7 +302,7 @@ impl PanelItemUi {
 			Transform::IDENTITY,
 			field.clone(),
 			GrabbableSettings {
-				max_distance: 0.02,
+				max_distance: 0.05,
 				linear_momentum: None,
 				angular_momentum: None,
 				pointer_mode: PointerMode::Align,
