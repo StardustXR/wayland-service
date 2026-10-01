@@ -10,6 +10,10 @@ license = "GPLv2"
 repository = "https://github.com/StardustXR/wayland-service/"
 homepage = "https://stardustxr.org"
 
+[patch.crates-io]
+gluon-ipc-codegen.git = "https://github.com/StardustXR/gluon-ipc"
+gluon-ipc.git = "https://github.com/StardustXR/gluon-ipc"
+
 [profile.dev]
 panic = "abort"
 
@@ -28,8 +32,7 @@ stardust-xr-fusion = "0.52.0"
 stardust-xr-molecules = "0.52.0"
 # stardust-xr-molecules.git = "https://github.com/StardustXR/molecules.git"
 
-# stardust-xr-panel-item = "0.52.0"
-stardust-xr-panel-item.git = "https://github.com/StardustXR/panel-item"
+stardust-xr-panels.git = "https://github.com/StardustXR/panel-item"
 
 stardust-xr-cme.git = "https://github.com/StardustXR/cme.git"
 vulkano = { git = "https://github.com/Schmarni-Dev/vulkano", branch = "0_35_dmabuf_fixes", default-features = false }
@@ -74,7 +77,7 @@ stardust-xr-protocol.workspace = true
 stardust-xr-fusion.workspace = true
 stardust-xr-molecules.workspace = true
 stardust-xr-cme.workspace = true
-stardust-xr-panel-item.workspace = true
+stardust-xr-panels.workspace = true
 vulkano.workspace = true
 rand = "0.10.0"
 rustc-hash = "2.1.1"

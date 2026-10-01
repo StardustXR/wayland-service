@@ -1,7 +1,7 @@
 use dashmap::{DashMap, DashSet};
 use memfd::MemfdOptions;
 use stardust_xr_fusion::keymap::Keymap;
-use stardust_xr_panel_item::panel_item::ModifierState;
+use stardust_xr_panels::panel_item::ModifierState;
 use std::{
 	io::Write,
 	os::{

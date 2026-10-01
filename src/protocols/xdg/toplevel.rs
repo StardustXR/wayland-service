@@ -10,7 +10,7 @@ use gluon_ipc::Node;
 use mint::Vector2;
 use parking_lot::Mutex;
 use stardust_xr_fusion::spatial::SpatialRef;
-use stardust_xr_panel_item::panel_item::SurfaceUpdateTarget;
+use stardust_xr_panels::panel_item::SurfaceUpdateTarget;
 use std::sync::Arc;
 use waynest::ObjectId;
 pub use waynest_protocols::server::stable::xdg_shell::xdg_toplevel::*;

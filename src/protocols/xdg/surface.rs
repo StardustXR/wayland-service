@@ -9,7 +9,7 @@ use crate::{
 use super::{popup::Popup, positioner::Positioner, toplevel::MappedInner};
 use mint::Vector2;
 use stardust_xr_fusion::spatial::{Spatial, SpatialExt as _, Transform};
-use stardust_xr_panel_item::panel_item::{ChildState, Rect, SurfaceId, SurfaceUpdateTarget};
+use stardust_xr_panels::panel_item::{ChildState, Rect, SurfaceId, SurfaceUpdateTarget};
 use std::sync::Arc;
 use waynest::ObjectId;
 use waynest_protocols::server::stable::xdg_shell::xdg_popup::XdgPopup;

@@ -5,7 +5,7 @@ use crate::util::{BufferedState, SurfaceCommitAwareBuffer};
 use mint::Vector2;
 use parking_lot::Mutex;
 use rand::random;
-use stardust_xr_panel_item::panel_item::{
+use stardust_xr_panels::panel_item::{
 	ChildState, Geometry, Rect, SurfaceId, SurfaceUpdateTarget,
 };
 use std::sync::Arc;

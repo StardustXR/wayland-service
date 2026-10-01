@@ -16,7 +16,7 @@ use crate::{
 use gluon_ipc::Node;
 use mint::Vector2;
 use parking_lot::{Mutex, RwLock};
-use stardust_xr_panel_item::panel_item::{Geometry, SurfaceUpdateTarget};
+use stardust_xr_panels::panel_item::{Geometry, SurfaceUpdateTarget};
 use std::{
 	fmt::Display,
 	sync::{Arc, OnceLock, Weak},

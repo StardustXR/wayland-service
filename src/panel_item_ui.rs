@@ -32,7 +32,7 @@ use stardust_xr_molecules::{
 	lines::arrow,
 	transformable::protocol::{Poseable, PoseableHandler},
 };
-use stardust_xr_panel_item::{
+use stardust_xr_panels::{
 	panel_item::{
 		ChildState, Geometry, PanelItem, PanelShell, PanelShellHandler, SurfaceUpdateTarget,
 	},

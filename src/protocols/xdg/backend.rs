@@ -14,7 +14,7 @@ use stardust_xr_fusion::{
 	spatial::SpatialRef,
 	types::{Size2, Timestamp, Vec2F},
 };
-use stardust_xr_panel_item::{
+use stardust_xr_panels::{
 	panel_item::{
 		ChildState, Geometry, ModifierState, PanelItem, PanelItemHandler, PanelShell, ScrollSource,
 		SurfaceId, SurfaceUpdateTarget,

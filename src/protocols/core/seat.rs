@@ -5,7 +5,7 @@ use crate::protocols::core::{
 };
 use mint::Vector2;
 use stardust_xr_fusion::keymap::Keymap;
-use stardust_xr_panel_item::panel_item::{ModifierState, ScrollSource};
+use stardust_xr_panels::panel_item::{ModifierState, ScrollSource};
 use std::sync::Arc;
 use std::sync::OnceLock;
 use waynest::ObjectId;
