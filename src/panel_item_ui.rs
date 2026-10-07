@@ -7,7 +7,6 @@ use std::{
 };
 
 use anyhow::Context;
-use glam::{Quat, Vec3};
 use gluon_ipc::{Handler, Interface, Node, RefExt, ToRef};
 use mint::{Vector2, Vector3};
 use parking_lot::Mutex;
@@ -16,21 +15,17 @@ use stardust_xr_fusion::{
 	dmatex::{DmatexRef, DmatexSubmitRelease},
 	drawable::{Lines, LinesExt, MaterialParameter, Model, ModelExt, ModelPart},
 	fields::{Field, FieldExt, FieldRef, FieldSample, Shape},
-	query::{
-		InterfaceDependency, QueriedInterface, QueryableExt, QueryableId, QueryableInterface,
-		QueryableObject,
-	},
+	query::{InterfaceDependency, QueriedInterface, QueryableId},
 	spatial::{Spatial, SpatialExt, SpatialRef, Transform},
 	spatial_query::{
 		Point, PointsQuery, PointsQueryHandle, PointsQueryHandler, PointsQueryHandlerHandler,
 	},
-	types::{Posef, Resource, Size2, rgba_linear},
+	types::{Resource, Size2, rgba_linear},
 };
 use stardust_xr_molecules::{
 	Derezzable, FrameSensitive, UIElement,
 	grabbable::{Grabbable, GrabbableSettings, PointerMode},
 	lines::arrow,
-	transformable::protocol::{Poseable, PoseableHandler},
 };
 use stardust_xr_panels::{
 	panel_item::{
@@ -193,56 +188,6 @@ impl PointsQueryHandlerHandler for ItemHandlerQuery {
 	}
 }
 
-/// poses land here and get handed to the grabbable next frame so its own pose stays in sync
-#[derive(Handler)]
-struct PanelPoseable {
-	root: SpatialRef,
-	content_parent: Spatial,
-	pending: Mutex<Option<Transform>>,
-}
-impl PanelPoseable {
-	async fn apply(&self, reference: SpatialRef, f: impl FnOnce(Transform) -> Transform) {
-		let spatial_interface = CLIENT.wait().spatial_interface();
-		let (reference_in_root, root_in_reference, local) = tokio::join!(
-			spatial_interface.get_relative_transform(self.root.clone(), reference.clone()),
-			spatial_interface.get_relative_transform(reference, self.root.clone()),
-			self.content_parent
-				.get_relative_transform(self.root.clone()),
-		);
-		let (Ok(Ok(reference_in_root)), Ok(Ok(root_in_reference)), Ok(Ok(local))) =
-			(reference_in_root, root_in_reference, local)
-		else {
-			return;
-		};
-		let mut pending = self.pending.lock();
-		let current = root_in_reference * pending.unwrap_or(local);
-		*pending = Some(reference_in_root * f(current));
-	}
-}
-impl PoseableHandler for PanelPoseable {
-	async fn offset_relative_pse(
-		&self,
-		_ctx: gluon_ipc::Context,
-		reference: SpatialRef,
-		offset: Posef,
-	) {
-		let offset = Transform::from_translation_rotation(offset.position, offset.orientation);
-		self.apply(reference, |current| offset * current).await
-	}
-
-	async fn set_relative_pose(
-		&self,
-		_ctx: gluon_ipc::Context,
-		reference: SpatialRef,
-		pose: Posef,
-	) {
-		self.apply(reference, |_| {
-			Transform::from_translation_rotation(pose.position, pose.orientation)
-		})
-		.await
-	}
-}
-
 #[derive(Handler)]
 pub struct PanelItemUi {
 	root: Spatial,
@@ -257,8 +202,6 @@ pub struct PanelItemUi {
 	showing_indicator: AtomicBool,
 
 	derezzable: Mutex<Derezzable>,
-	poseable: Node<PanelPoseable>,
-	_poseable_queryable: (QueryableObject, QueryableInterface),
 }
 
 impl std::fmt::Debug for PanelItemUi {
@@ -306,6 +249,8 @@ impl PanelItemUi {
 				linear_momentum: None,
 				angular_momentum: None,
 				pointer_mode: PointerMode::Align,
+				containable: true,
+				poseable: true,
 			},
 		)
 		.await?;
@@ -331,16 +276,6 @@ impl PanelItemUi {
 			.context("panel model has no Panel part")?;
 		let content_parent = grabbable.content_parent().clone();
 		let derezzable = Derezzable::new(client, content_parent.clone(), field.clone()).await?;
-		let (poseable, poseable_proxy) = Poseable::new_node(PanelPoseable {
-			root: root_ref,
-			content_parent: content_parent.clone(),
-			pending: Mutex::new(None),
-		})?;
-		let poseable_queryable =
-			QueryableObject::new(client, content_parent, field.clone()).await?;
-		let poseable_interface =
-			QueryableExt::add_interface(&poseable_queryable, &Poseable::from(poseable_proxy))
-				.await?;
 		let acceptor_indicator = Lines::new(client, &field_spatial, vec![]).await?;
 		let query = ItemHandlerQuery::new(
 			Arc::downgrade(toplevel),
@@ -362,8 +297,6 @@ impl PanelItemUi {
 			acceptor_indicator,
 			showing_indicator: AtomicBool::new(false),
 			derezzable: Mutex::new(derezzable),
-			poseable,
-			_poseable_queryable: (poseable_queryable, poseable_interface),
 		})?;
 		// The proxy is dropped: this panel item's shell is in-process, so nothing
 		// remote ever reaches the backend and it is only ever used through its
@@ -412,11 +345,6 @@ impl PanelItemUi {
 		let mut grabbable = self.grabbable.write().await;
 		if grabbable.handle_events() {
 			grabbable.frame(&frame_info);
-		}
-		if let Some(t) = self.poseable.pending.lock().take()
-			&& !grabbable.grab_action().actor_acting()
-		{
-			grabbable.set_pose(Vec3::from(t.translation), Quat::from(t.rotation));
 		}
 		// disable auto insert on grab
 		let just_grabbed = grabbable.grab_action().actor_stopped();

@@ -3,16 +3,12 @@ edition = "2024"
 rust-version = "1.89"
 
 name = "stardust-xr-wayland-service"
-version = "0.52.0"
+version = "0.53.0-rc.1"
 authors = ["Nova King <technobaboo@proton.me>"]
 description = "Wayland Compatibillity service for Stardust XR"
 license = "GPLv2"
 repository = "https://github.com/StardustXR/wayland-service/"
 homepage = "https://stardustxr.org"
-
-[patch.crates-io]
-gluon-ipc-codegen.git = "https://github.com/StardustXR/gluon-ipc"
-gluon-ipc.git = "https://github.com/StardustXR/gluon-ipc"
 
 [profile.dev]
 panic = "abort"
@@ -23,22 +19,23 @@ members = ["display-socket-finder"]
 [workspace.dependencies]
 mint = "0.5.9"
 
-stardust-xr-protocol = "0.52.0"
+stardust-xr-protocol = "0.53.0-rc.1"
 # stardust-xr-protocol.git = "https://github.com/StardustXR/core.git"
 
-stardust-xr-fusion = "0.52.0"
+stardust-xr-fusion = "0.53.0-rc.1"
 # stardust-xr-fusion.git = "https://github.com/StardustXR/core.git"
 
-stardust-xr-molecules = "0.52.0"
+stardust-xr-molecules = "0.53.0-rc.1"
 # stardust-xr-molecules.git = "https://github.com/StardustXR/molecules.git"
 
-stardust-xr-panels.git = "https://github.com/StardustXR/panel-item"
+stardust-xr-panels = "0.53.0-rc.1"
+# stardust-xr-panels.git = "https://github.com/StardustXR/panel-item"
 
 stardust-xr-cme.git = "https://github.com/StardustXR/cme.git"
 vulkano = { git = "https://github.com/Schmarni-Dev/vulkano", branch = "0_35_dmabuf_fixes", default-features = false }
 
 [dependencies]
-gluon-ipc = "0.1.0"
+gluon-ipc = "0.1.1"
 # gluon-ipc.git = "https://github.com/technobaboo/gluon"
 
 waynest = { git = "https://github.com/verdiwm/waynest.git", default-features = false, rev = "ddab3f" }
