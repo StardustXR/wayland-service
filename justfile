@@ -30,7 +30,7 @@ clean-dist: clean
 
 # Compiles with debug profile
 build-debug *args:
-    cargo build {{ args }}
+    cargo build --all {{ args }}
 
 # Compiles with release profile
 build-release *args: (build-debug '--release' args)
