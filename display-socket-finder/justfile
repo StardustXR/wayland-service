@@ -1,5 +1,5 @@
-name := 'stardust-xr-wayland-service'
-export APPID := 'org.stardustxr.WaylandService'
+name := 'display-socket-finder'
+export APPID := 'org.stardustxr.DisplaySocketFinder'
 
 # Use mold linker if clang and mold exists.
 
@@ -9,11 +9,9 @@ linker-arg := if clang-path != '' { if mold-path != '' { '-C linker=' + clang-pa
 export RUSTFLAGS := linker-arg + env('RUSTFLAGS', '')
 rootdir := ''
 prefix := '/usr'
-just := just_executable()
 base-dir := absolute_path(clean(rootdir / prefix))
 export INSTALL_DIR := base-dir / 'share'
-export STARDUST_RES_PREFIXES := INSTALL_DIR
-cargo-target-dir := env('CARGO_TARGET_DIR', 'target')
+cargo-target-dir := env('CARGO_TARGET_DIR', '../target')
 bin-src := cargo-target-dir / 'release' / name
 bin-dst := base-dir / 'bin' / name
 
@@ -54,19 +52,15 @@ install:
     install -Dm0755 {{ bin-src }} {{ bin-dst }}
     @just data/install
 
-    {{ just }} rootdir="{{ rootdir }}" prefix="{{ prefix }}" display-socket-finder/install
-
 # Uninstalls installed files
 uninstall:
     rm {{ bin-dst }}
     @just data/uninstall
 
-    {{ just }} rootdir="{{ rootdir }}" prefix="{{ prefix }}" display-socket-finder/uninstall
-
 # Vendor dependencies locally
 vendor:
     mkdir -p .cargo
-    cargo vendor --sync Cargo.toml | head -n -1 > .cargo/config.toml
+    cargo vendor --sync Cargo.toml --sync config/Cargo.toml | head -n -1 > .cargo/config.toml
     echo 'directory = "vendor"' >> .cargo/config.toml
     tar pcf vendor.tar vendor
     rm -rf vendor
