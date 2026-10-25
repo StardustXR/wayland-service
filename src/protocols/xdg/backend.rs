@@ -132,7 +132,7 @@ impl XdgBackend {
 						tracing::debug!("toplevel gone, nothing to switch panel shell for");
 						return;
 					};
-					match PanelItemUi::create(output_spatial, &seat, &toplevel, false).await {
+					match PanelItemUi::create(output_spatial, &seat, &toplevel).await {
 						Ok(shell) => toplevel.switch_panel_shell(shell).await,
 						Err(e) => tracing::error!("failed to recreate panel item ui: {e:#}"),
 					}

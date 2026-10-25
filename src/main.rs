@@ -25,6 +25,7 @@ pub mod signal_on_drop;
 pub mod socket;
 pub mod util;
 pub mod vulkan_ctx;
+pub mod default_panel_shell;
 
 pub const APP_ID: &str = "org.stardustxr.WaylandService";
 

@@ -1,15 +1,9 @@
-use crate::{
-	client::Client,
-	error::WaylandResult,
-	panel_item_ui::PanelItemUi,
-	protocols::core::{seat::Seat, surface::Surface},
-};
+use crate::{client::Client, error::WaylandResult, protocols::core::surface::Surface};
 
 use super::backend::XdgBackend;
 use gluon_ipc::Node;
 use mint::Vector2;
 use parking_lot::Mutex;
-use stardust_xr_fusion::spatial::SpatialRef;
 use stardust_xr_panels::panel_item::SurfaceUpdateTarget;
 use std::sync::Arc;
 use waynest::ObjectId;
@@ -19,19 +13,6 @@ use waynest_server::Client as _;
 #[derive(Debug)]
 pub struct MappedInner {
 	pub panel_item: Arc<Node<XdgBackend>>,
-}
-impl MappedInner {
-	// TODO: add local panel item ui and make switching work by aborting the release task and
-	// recreating it with a new release point in the timeline
-	pub async fn create(
-		seat: &Arc<Seat>,
-		toplevel: &Arc<Toplevel>,
-		at: SpatialRef,
-		auto_insert: bool,
-	) -> anyhow::Result<Self> {
-		let panel_item = PanelItemUi::create(at, seat, toplevel, auto_insert).await?;
-		Ok(Self { panel_item })
-	}
 }
 
 #[derive(Debug, Clone)]

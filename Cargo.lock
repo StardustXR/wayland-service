@@ -1670,8 +1670,7 @@ dependencies = [
 [[package]]
 name = "stardust-xr-panels"
 version = "0.53.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "12fc54e02018e5c6f8245878fe11559202a0f5ad523d80252e51f9d85c9692ec"
+source = "git+https://github.com/StardustXR/panel-item#d2ce83212c759a50ed09e50377ab48171a9f5692"
 dependencies = [
  "gluon-ipc",
  "gluon-ipc-codegen",
@@ -1681,6 +1680,7 @@ dependencies = [
  "stardust-xr-protocol",
  "tokio",
  "tracing",
+ "xdg",
 ]
 
 [[package]]

@@ -28,8 +28,8 @@ stardust-xr-fusion = "0.53.0-rc.1"
 stardust-xr-molecules = "0.53.0-rc.1"
 # stardust-xr-molecules.git = "https://github.com/StardustXR/molecules.git"
 
-stardust-xr-panels = "0.53.0-rc.1"
-# stardust-xr-panels.git = "https://github.com/StardustXR/panel-item"
+# stardust-xr-panels = "0.53.0-rc.1"
+stardust-xr-panels.git = "https://github.com/StardustXR/panel-item"
 
 stardust-xr-cme.git = "https://github.com/StardustXR/cme.git"
 vulkano = { git = "https://github.com/Schmarni-Dev/vulkano", branch = "0_35_dmabuf_fixes", default-features = false }

@@ -1,7 +1,9 @@
 use crate::{
-	CLIENT, DEFAULT_PANEL_SHELL_PATH,
+	CLIENT,
 	client::{Client, Message},
+	default_panel_shell::spawn_default_panel_shell,
 	error::{WaylandError, WaylandResult},
+	panel_item_ui::PanelItemUi,
 	protocols::{core::surface::SurfaceRole, xdg::toplevel::Toplevel},
 	util::get_env,
 };
@@ -80,7 +82,7 @@ impl XdgSurface for Surface {
 		let toplevel_weak = Arc::downgrade(&toplevel);
 		let display = client.display()?;
 		let seat = display.seat.get().map(Arc::downgrade).unwrap_or_default();
-		let pid = dbg!(display.pid);
+		let pid = display.pid;
 		let configured = self.configured.clone();
 		let mut first_commit = true;
 		let message_tx = client.message_sink()?.clone();
@@ -108,59 +110,42 @@ impl XdgSurface for Surface {
 					.and_then(|pid| get_env(pid).ok())
 					.and_then(|mut v| v.remove("STARDUST_STARTUP_TOKEN"));
 				tokio::spawn(async move {
-					let path = DEFAULT_PANEL_SHELL_PATH.wait();
-					let mut auto_connect = false;
-					if let Some(path_str) = dbg!(path).to_str()
-						&& path.exists()
-					{
-						let mut vars = Vec::with_capacity(4);
-						vars.push(("SDXR_WL_DEFAULT_PANEL_SHELL".into(), "1".into()));
-						if let Some(token) = spatial_token.as_ref() {
-							vars.push(("STARDUST_STARTUP_TOKEN".into(), token.clone()));
-						}
-						if let Some(app_id) = toplevel.app_id() {
-							vars.push(("SDXR_WL_APP_ID".into(), app_id));
-						}
-						if let Some(title) = toplevel.title() {
-							vars.push(("SDXR_WL_TITLE".into(), title));
-						}
-						protostar_launcher::launch(path_str.into(), vars).await;
-						auto_connect = true;
-					}
-					let spatial_ref = if let Some(token) = spatial_token
-						&& let Some(spatial_ref) = client.startup_token_spatial(dbg!(token)).await
-					{
-						spatial_ref
-					} else {
-						match Spatial::new(client, client.root(), Transform::IDENTITY).await {
-							Ok((_, spatial_ref)) => spatial_ref,
-							Err(e) => {
-								tracing::error!("failed to create spatial for toplevel: {e}");
-								return;
-							}
-						}
-					};
 					let Some(seat) = seat.upgrade() else {
 						tracing::warn!("no seat available, cannot map toplevel");
 						return;
 					};
-					let mapped_inner = match MappedInner::create(
-						&seat,
-						&toplevel,
-						spatial_ref,
-						auto_connect,
-					)
-					.await
-					{
-						Ok(mapped_inner) => mapped_inner,
-						Err(e) => {
-							tracing::error!("failed to create panel item ui for toplevel: {e:#}");
-							return;
+					let default_panel_shell_item =
+						spawn_default_panel_shell(&spatial_token, &toplevel, &seat).await;
+					let panel_item = if let Some(i) = default_panel_shell_item {
+						i
+					} else {
+						let spatial_ref = if let Some(token) = spatial_token
+							&& let Some(spatial_ref) = client.startup_token_spatial(token).await
+						{
+							spatial_ref
+						} else {
+							match Spatial::new(client, client.root(), Transform::IDENTITY).await {
+								Ok((_, spatial_ref)) => spatial_ref,
+								Err(e) => {
+									tracing::error!("failed to create spatial for toplevel: {e}");
+									return;
+								}
+							}
+						};
+
+						match PanelItemUi::create(spatial_ref, &seat, &toplevel).await {
+							Ok(panel_item) => panel_item,
+							Err(e) => {
+								tracing::error!(
+									"failed to create panel item ui for toplevel: {e:#}"
+								);
+								return;
+							}
 						}
 					};
 					let mut mapped_lock = toplevel.mapped.lock();
 					// *surface.panel_item.lock() = Arc::downgrade(&mapped_inner.panel_item);
-					mapped_lock.replace(mapped_inner);
+					mapped_lock.replace(MappedInner { panel_item });
 					drop(mapped_lock);
 					toplevel
 						.wl_surface()

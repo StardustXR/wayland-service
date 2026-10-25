@@ -57,8 +57,6 @@ struct ItemHandlerQuery {
 	/// `moved` so it can be visualized without us sampling the field ourselves.
 	/// only captured on release.
 	acceptor: RwLock<Option<(PanelItemAcceptor, FieldSample)>>,
-	/// When true tries once to automatically connect to a PanelItemAcceptor on intersection
-	auto_insert: AtomicBool,
 }
 impl ItemHandlerQuery {
 	async fn new(
@@ -66,7 +64,6 @@ impl ItemHandlerQuery {
 		seat: Weak<Seat>,
 		ref_space: SpatialRef,
 		size: impl Into<Vector2<usize>>,
-		auto_insert: bool,
 	) -> stardust_xr_fusion::Result<Node<Self>> {
 		let (node, query_handler) = PointsQueryHandler::new_node(Self {
 			toplevel,
@@ -74,7 +71,6 @@ impl ItemHandlerQuery {
 			replaced: AtomicBool::new(false),
 			handle: OnceLock::new(),
 			acceptor: RwLock::new(None),
-			auto_insert: AtomicBool::new(auto_insert),
 		})?;
 		tracing::debug!("creating object: {:?}", query_handler.to_ref());
 		let handle = CLIENT
@@ -163,9 +159,6 @@ impl PointsQueryHandlerHandler for ItemHandlerQuery {
 			let acceptor = PanelItemAcceptor::from_ref(v.interface);
 			*self.acceptor.write().await = Some((acceptor, sample));
 		}
-		if self.auto_insert.swap(false, Ordering::Relaxed) {
-			self.try_capture().await;
-		}
 	}
 
 	fn interfaces_changed(
@@ -214,13 +207,17 @@ impl std::fmt::Debug for PanelItemUi {
 			.finish()
 	}
 }
+// impl Drop for PanelItemUi {
+// 	fn drop(&mut self) {
+//         tracing::error!("uuuuuuhhhh dropping panel item ui, aaaaaaaaaaa");
+// 	}
+// }
 
 impl PanelItemUi {
 	pub async fn create(
 		at: SpatialRef,
 		seat: &Arc<Seat>,
 		toplevel: &Arc<Toplevel>,
-		auto_insert: bool,
 	) -> anyhow::Result<Arc<Node<XdgBackend>>> {
 		let client = CLIENT.wait();
 		let size = toplevel
@@ -282,7 +279,6 @@ impl PanelItemUi {
 			Arc::downgrade(seat),
 			field_spatial_ref,
 			size,
-			auto_insert,
 		)
 		.await?;
 		let (panel_shell_handler, panel_shell) = PanelShell::new_node(Self {
@@ -346,15 +342,10 @@ impl PanelItemUi {
 		if grabbable.handle_events() {
 			grabbable.frame(&frame_info);
 		}
-		// disable auto insert on grab
-		let just_grabbed = grabbable.grab_action().actor_stopped();
 		// only try to capture into an acceptor once the user lets go, so
 		// dragging the panel through an acceptor's field doesn't snap it in.
 		let just_released = grabbable.grab_action().actor_stopped();
 		drop(grabbable);
-		if just_grabbed {
-			self.query.auto_insert.store(false, Ordering::Relaxed);
-		}
 		if just_released {
 			self.query.try_capture().await;
 		}
