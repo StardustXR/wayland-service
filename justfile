@@ -3,16 +3,16 @@ export APPID := 'org.stardustxr.WaylandService'
 
 # Use mold linker if clang and mold exists.
 
+just := just_executable()
 clang-path := `which clang || true`
 mold-path := `which mold || true`
 linker-arg := if clang-path != '' { if mold-path != '' { '-C linker=' + clang-path + ' -C link-arg=--ld-path=' + mold-path + ' ' } else { '' } } else { '' }
 export RUSTFLAGS := linker-arg + env('RUSTFLAGS', '')
 rootdir := ''
 prefix := '/usr'
-just := just_executable()
 base-dir := absolute_path(clean(rootdir / prefix))
 export INSTALL_DIR := base-dir / 'share'
-export STARDUST_RES_PREFIXES := INSTALL_DIR
+export STARDUST_RES_PREFIXES := prefix / 'share'
 cargo-target-dir := env('CARGO_TARGET_DIR', 'target')
 bin-src := cargo-target-dir / 'release' / name
 bin-dst := base-dir / 'bin' / name
