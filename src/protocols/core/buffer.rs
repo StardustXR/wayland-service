@@ -85,7 +85,20 @@ impl Buffer {
 			BufferBacking::Dmabuf(backing) => backing.new_timeline_point(),
 		}
 	}
+	/// Host-linear shm buffers are copied synchronously in update(), so the client can
+	/// reuse the wl_buffer right away instead of waiting on the server's release point.
+	fn releases_immediately(&self) -> bool {
+		matches!(&self.backing, BufferBacking::Shm(backing) if backing.is_host_linear())
+	}
 	fn release_task(self: &Arc<Self>, timeline: Arc<TimelineSyncObj>, release: u64) -> AbortHandle {
+		if self.releases_immediately() {
+			let message_sink = self.message_sink.clone();
+			let buffer = self.clone();
+			return tokio::spawn(async move {
+				message_sink.send(crate::client::Message::ReleaseBuffer(buffer))
+			})
+			.abort_handle();
+		}
 		tokio::spawn({
 			let message_sink = self.message_sink.clone();
 			let buffer = self.clone();
@@ -119,10 +132,14 @@ pub struct BufferSubmit {
 impl BufferSubmit {
 	pub fn reapply(self) -> Option<BufferSubmit> {
 		let new_release = self.buffer.new_timeline_point();
-		self.release_task.abort();
-		let release_task = self
-			.buffer
-			.release_task(self.release.timeline().clone(), new_release);
+		let release_task = if self.buffer.releases_immediately() {
+			// already released to the client after the copy
+			self.release_task
+		} else {
+			self.release_task.abort();
+			self.buffer
+				.release_task(self.release.timeline().clone(), new_release)
+		};
 		let release = SignalOnDrop::new(self.release.timeline().clone(), new_release)?;
 		Some(BufferSubmit {
 			dmatex: self.dmatex,

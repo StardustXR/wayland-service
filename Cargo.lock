@@ -1605,7 +1605,7 @@ dependencies = [
 [[package]]
 name = "stardust-xr-cme"
 version = "0.53.0-rc.1"
-source = "git+https://github.com/StardustXR/cme.git#0ba570eab3371ff85b3db1a80855618a6be980be"
+source = "git+https://github.com/TaylorBeeston/cme.git?branch=roadie%2Fhost-linear-dmatex#a14be429b17863cce8aa9c4c450db5178744d543"
 dependencies = [
  "drm-fourcc",
  "rustix",

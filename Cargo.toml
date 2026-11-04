@@ -82,3 +82,7 @@ timeline_syncobj = { version = "0.2.0", features = ["tokio"] }
 protostar-launcher = { git = "https://github.com/StardustXR/protostar" }
 clap = { version = "4.6.2", features = ["derive"] }
 anyhow = "1.0.104"
+
+# TODO: drop once StardustXR/cme gains Dmatex::new_host_linear
+[patch."https://github.com/StardustXR/cme.git"]
+stardust-xr-cme = { git = "https://github.com/TaylorBeeston/cme.git", branch = "roadie/host-linear-dmatex" }

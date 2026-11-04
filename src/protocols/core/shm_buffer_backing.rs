@@ -37,7 +37,8 @@ pub struct ShmBufferBacking {
 	size: Vector2<u64>,
 	wl_format: Format,
 	dmatex: Arc<Dmatex>,
-	staging_buffer: Subbuffer<[u8]>,
+	/// `None` when the dmatex is host-linear and written directly by the CPU
+	staging_buffer: Option<Subbuffer<[u8]>>,
 	next_acquire_point: AtomicU64,
 	timeline_copy: Arc<TimelineSyncObj>,
 }
@@ -63,36 +64,65 @@ impl ShmBufferBacking {
 			.get(&texture_format)
 			.cloned()
 			.ok_or(ShmBackingCreationError::FormatNotSupportedByDmatex)?;
-		let dmatex = Arc::new(
-			Dmatex::new(
+		// Copying shm into a host-visible LINEAR image on the CPU needs no queue submits.
+		// NVIDIA 615.78 loses the device (Xid 32) on our transfer submits once a dmatex
+		// exists, so this is the default; SDXR_SHM_GPU_UPLOAD=1 forces the old path.
+		let host_linear = if *SHM_GPU_UPLOAD {
+			None
+		} else {
+			match Dmatex::new_host_linear(
 				client,
 				&vk.dev,
 				&vk.render_dev,
-				DmatexSize::Size2D {
-					size: [size.x as u32, size.y as u32].into(),
-				},
+				[size.x as u32, size.y as u32],
 				&format,
-				None,
 				AlphaMode::PremultipliedElectrical,
-				ImageUsage::TRANSFER_DST,
 			)
-			.await,
-		);
+			.await
+			{
+				Ok(dmatex) => Some(dmatex),
+				Err(e) => {
+					tracing::warn!("host-linear shm dmatex unavailable, using GPU upload: {e}");
+					None
+				}
+			}
+		};
+		let (dmatex, staging_buffer) = match host_linear {
+			Some(dmatex) => (Arc::new(dmatex), None),
+			None => {
+				let dmatex = Arc::new(
+					Dmatex::new(
+						client,
+						&vk.dev,
+						&vk.render_dev,
+						DmatexSize::Size2D {
+							size: [size.x as u32, size.y as u32].into(),
+						},
+						&format,
+						None,
+						AlphaMode::PremultipliedElectrical,
+						ImageUsage::TRANSFER_DST,
+					)
+					.await,
+				);
 
-		let staging_buffer = Buffer::new_slice::<u8>(
-			vk.mem_alloc.clone(),
-			BufferCreateInfo {
-				usage: BufferUsage::TRANSFER_SRC,
-				..Default::default()
-			},
-			AllocationCreateInfo {
-				memory_type_filter: MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
-				..Default::default()
-			},
-			// when supporting more formats we need to change this 4
-			size.x * size.y * 4 as DeviceSize,
-		)
-		.map_err(ShmBackingCreationError::StagingBufferAllocationFailed)?;
+				let staging_buffer = Buffer::new_slice::<u8>(
+					vk.mem_alloc.clone(),
+					BufferCreateInfo {
+						usage: BufferUsage::TRANSFER_SRC,
+						..Default::default()
+					},
+					AllocationCreateInfo {
+						memory_type_filter: MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+						..Default::default()
+					},
+					// when supporting more formats we need to change this 4
+					size.x * size.y * 4 as DeviceSize,
+				)
+				.map_err(ShmBackingCreationError::StagingBufferAllocationFailed)?;
+				(dmatex, Some(staging_buffer))
+			}
+		};
 		let timeline_copy = Arc::new(
 			TimelineSyncObj::import(
 				vk.render_dev.drm_node(),
@@ -120,8 +150,12 @@ impl ShmBufferBacking {
 	pub fn update(&self) -> (DmatexRef, u64, u64) {
 		let acquire = self.next_acquire_point.fetch_add(1, Ordering::Relaxed);
 		let release = self.next_acquire_point.fetch_add(1, Ordering::Relaxed);
+		let Some(staging_buffer) = &self.staging_buffer else {
+			self.update_host_linear(acquire);
+			return (self.dmatex.dmatex.clone(), acquire, release);
+		};
 		// TODO: move this to a blocking thread
-		match self.staging_buffer.write() {
+		match staging_buffer.write() {
 			Ok(mut writer) => {
 				let shm_data = self.pool.data_lock();
 				for y in 0..self.size.y {
@@ -145,7 +179,7 @@ impl ShmBufferBacking {
 		if UPLOAD_QUEUE
 			.send(DmatexUpload {
 				tex: self.dmatex.clone(),
-				staging: self.staging_buffer.clone(),
+				staging: staging_buffer.clone(),
 				acquire,
 			})
 			.is_err()
@@ -154,6 +188,38 @@ impl ShmBufferBacking {
 		}
 		// self.staging_buffer.
 		(self.dmatex.dmatex.clone(), acquire, release)
+	}
+
+	fn update_host_linear(&self, acquire: u64) {
+		let Some(map) = self.dmatex.host_map else {
+			unreachable!("shm backings without a staging buffer are host-linear");
+		};
+		{
+			let shm_data = self.pool.data_lock();
+			let line_len = (self.size.x * 4) as usize;
+			for y in 0..self.size.y as usize {
+				let shm_offset = self.offset + y * self.stride;
+				let Some(src) = shm_data.get(shm_offset..shm_offset + line_len) else {
+					tracing::error!("shm buffer reaches outside its pool");
+					break;
+				};
+				// SAFETY: self.dmatex owns the mapping and only this backing writes it.
+				// The server may sample mid-copy, which can tear but is otherwise fine.
+				if !unsafe { map.write_row(y, src) } {
+					tracing::error!("shm row {y} doesn't fit the host-linear dmatex");
+					break;
+				}
+			}
+		}
+		// SAFETY: the CPU copy above is the only work this acquire point waits on
+		if let Err(e) = unsafe { self.dmatex.timeline.signal(acquire) } {
+			tracing::error!("failed to signal host-linear acquire point: {e}");
+		}
+	}
+
+	/// Host-linear updates copy synchronously, so the wl_buffer can be released right away
+	pub fn is_host_linear(&self) -> bool {
+		self.staging_buffer.is_none()
 	}
 
 	pub fn timeline(&self) -> Arc<TimelineSyncObj> {
@@ -251,6 +317,9 @@ fn dmatex_upload_task(mut receiver: mpsc::UnboundedReceiver<DmatexUpload>) {
 		}
 	}
 }
+
+static SHM_GPU_UPLOAD: LazyLock<bool> =
+	LazyLock::new(|| std::env::var_os("SDXR_SHM_GPU_UPLOAD").is_some_and(|v| v == "1"));
 
 fn submit_uploads(vk: &VkContext, uploads: &[DmatexUpload]) -> anyhow::Result<Vec<Arc<Semaphore>>> {
 	let mut cmd_buf = AutoCommandBufferBuilder::primary(
