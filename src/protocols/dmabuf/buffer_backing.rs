@@ -7,7 +7,7 @@ use stardust_xr_fusion::dmatex::{
 	AlphaMode, DisjointDmatexPlane, DmatexExt, DmatexFormat, DmatexPlanes, DmatexRef, DmatexSize,
 };
 use std::{
-	os::fd::OwnedFd,
+	os::fd::{AsFd, BorrowedFd, FromRawFd, OwnedFd},
 	sync::{
 		Arc,
 		atomic::{AtomicU64, Ordering},
@@ -23,7 +23,9 @@ pub struct DmabufBacking {
 	size: Vector2<u32>,
 	format: DrmFourcc,
 	timeline: Arc<TimelineSyncObj>,
-	fds: Arc<Vec<AsyncFd<OwnedFd>>>,
+	/// raw plane fds; NOT registered with the reactor (a dmabuf polls ready forever,
+	/// which made tokio spin ~54k epoll_wait/s). Per frame we export a one-shot sync_file.
+	fds: Arc<Vec<OwnedFd>>,
 	dmatex: DmatexRef,
 	next_acquire_point: AtomicU64,
 }
@@ -74,22 +76,17 @@ impl DmabufBacking {
 				dmabuf_fd,
 				planes: _,
 			} => vec![
-				AsyncFd::new(
-					dmabuf_fd
-						.try_clone()
-						.map_err(DmatexImportError::DmabufFdCloneError)?,
-				)
-				.map_err(DmatexImportError::DmabufFdRegisterError)?,
+				dmabuf_fd
+					.try_clone()
+					.map_err(DmatexImportError::DmabufFdCloneError)?,
 			]
 			.into(),
 			DmatexPlanes::Disjoint { planes } => planes
 				.iter()
 				.map(|v| {
-					let fd = v
-						.dmabuf_fd
+					v.dmabuf_fd
 						.try_clone()
-						.map_err(DmatexImportError::DmabufFdCloneError)?;
-					AsyncFd::new(fd).map_err(DmatexImportError::DmabufFdRegisterError)
+						.map_err(DmatexImportError::DmabufFdCloneError)
 				})
 				.collect::<Result<Vec<_>, _>>()?
 				.into(),
@@ -139,16 +136,34 @@ impl DmabufBacking {
 	pub fn update(&self) -> (DmatexRef, u64, u64) {
 		let acquire = self.next_acquire_point.fetch_add(1, Ordering::Relaxed);
 		let release = self.next_acquire_point.fetch_add(1, Ordering::Relaxed);
-		tokio::spawn({
-			let fds = self.fds.clone();
-			let timeline = self.timeline.clone();
-			async move {
-				for fd in fds.iter() {
-					_ = fd.readable().await;
+		let fds = self.fds.clone();
+		let timeline = self.timeline.clone();
+		// Opt-in fast path (WL_DMABUF_IMPORT_FENCE=1): import the sync_file into the
+		// acquire timeline point with no CPU wait. Default off: on NVIDIA the exported
+		// sync_file is often already signaled (weak/empty implicit fences), so import
+		// makes acquire available immediately and the consumer can sample a half-written
+		// host-mirror frame (periodic blink). Old semantics were: spawn, await readable,
+		// then timeline.signal(acquire); the one-shot path below keeps that via the one-shot path below.
+		if import_fence_enabled() && fds.len() == 1 {
+			match export_sync_file(fds[0].as_fd()) {
+				Ok(sync) => match timeline.import_sync_file_point(sync.as_fd(), acquire) {
+					Ok(()) => return (self.dmatex.clone(), acquire, release),
+					Err(e) => tracing::warn!("import dmabuf sync_file failed, cpu wait: {e}"),
+				},
+				Err(e) => tracing::warn!("DMA_BUF_IOCTL_EXPORT_SYNC_FILE failed, cpu wait: {e}"),
+			}
+		}
+		// Default: one-shot sync_file per plane, awaited then dropped (deregistered).
+		// Same CPU-side wait+signal as before, without a lifelong AsyncFd registration.
+		tokio::spawn(async move {
+			for fd in fds.iter() {
+				match export_sync_file(fd.as_fd()).and_then(AsyncFd::new) {
+					Ok(sync) => _ = sync.readable().await,
+					Err(e) => tracing::warn!("dmabuf fence export failed, not waiting: {e}"),
 				}
-				unsafe {
-					_ = timeline.signal(acquire);
-				}
+			}
+			unsafe {
+				_ = timeline.signal(acquire);
 			}
 		});
 		(self.dmatex.clone(), acquire, release)
@@ -208,4 +223,51 @@ pub enum DmatexImportError {
 	DmabufFdCloneError(std::io::Error),
 	#[error("Failed to register Dmabuf fd with tokio: {0}")]
 	DmabufFdRegisterError(std::io::Error),
+}
+
+/// WL_DMABUF_IMPORT_FENCE=1 enables import_sync_file_point fast path (default off).
+fn import_fence_enabled() -> bool {
+	static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+	*ENABLED.get_or_init(|| matches!(std::env::var_os("WL_DMABUF_IMPORT_FENCE").as_deref(), Some(v) if v == "1"))
+}
+
+/// DMA_BUF_IOCTL_EXPORT_SYNC_FILE with DMA_BUF_SYNC_READ: returns a sync_file that
+/// signals once all pending writes (implicit fences) on the dmabuf are done.
+pub(crate) fn export_sync_file(fd: BorrowedFd<'_>) -> std::io::Result<OwnedFd> {
+	#[repr(C)]
+	struct DmaBufExportSyncFile {
+		flags: u32,
+		fd: i32,
+	}
+	unsafe impl rustix::ioctl::Ioctl for &mut DmaBufExportSyncFile {
+		type Output = ();
+		const IS_MUTATING: bool = true;
+		fn opcode(&self) -> rustix::ioctl::Opcode {
+			rustix::ioctl::opcode::read_write::<DmaBufExportSyncFile>(b'b', 2)
+		}
+		fn as_ptr(&mut self) -> *mut core::ffi::c_void {
+			(*self as *mut DmaBufExportSyncFile).cast()
+		}
+		unsafe fn output_from_ptr(
+			_: rustix::ioctl::IoctlOutput,
+			_: *mut core::ffi::c_void,
+		) -> rustix::io::Result<()> {
+			Ok(())
+		}
+	}
+	const DMA_BUF_SYNC_READ: u32 = 1;
+	let mut arg = DmaBufExportSyncFile { flags: DMA_BUF_SYNC_READ, fd: -1 };
+	unsafe { rustix::ioctl::ioctl(fd, &mut arg) }.map_err(std::io::Error::from)?;
+	Ok(unsafe { OwnedFd::from_raw_fd(arg.fd) })
+}
+
+#[cfg(test)]
+mod tests {
+	#[test]
+	fn export_sync_file_opcode_matches_kernel() {
+		// include/uapi/linux/dma-buf.h: _IOWR('b', 2, struct dma_buf_export_sync_file) = 0xc0086202
+		#[repr(C)]
+		struct S { _f: u32, _d: i32 }
+		assert_eq!(rustix::ioctl::opcode::read_write::<S>(b'b', 2) as u64, 0xc008_6202);
+	}
 }
