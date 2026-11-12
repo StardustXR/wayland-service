@@ -1,6 +1,7 @@
 pub mod buffer_backing;
 pub mod buffer_params;
 pub mod feedback;
+pub mod ioctl_bindings;
 
 use crate::{
 	CLIENT,

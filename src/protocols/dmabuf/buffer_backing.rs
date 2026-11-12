@@ -1,4 +1,8 @@
-use crate::{CLIENT, vulkan_ctx::VK};
+use crate::{
+	CLIENT,
+	protocols::dmabuf::ioctl_bindings::{DmabufExportSyncFile, DmabufSyncFlags, SyncFileMerge},
+	vulkan_ctx::VK,
+};
 
 use super::buffer_params::BufferParams;
 use drm_fourcc::DrmFourcc;
@@ -7,14 +11,13 @@ use stardust_xr_fusion::dmatex::{
 	AlphaMode, DisjointDmatexPlane, DmatexExt, DmatexFormat, DmatexPlanes, DmatexRef, DmatexSize,
 };
 use std::{
-	os::fd::OwnedFd,
+	os::fd::{AsFd, AsRawFd, OwnedFd},
 	sync::{
 		Arc,
 		atomic::{AtomicU64, Ordering},
 	},
 };
 use timeline_syncobj::timeline_syncobj::TimelineSyncObj;
-use tokio::io::unix::AsyncFd;
 use waynest_protocols::server::stable::linux_dmabuf_v1::zwp_linux_buffer_params_v1::Flags;
 
 /// Parameters for a shared memory buffer
@@ -23,7 +26,7 @@ pub struct DmabufBacking {
 	size: Vector2<u32>,
 	format: DrmFourcc,
 	timeline: Arc<TimelineSyncObj>,
-	fds: Arc<Vec<AsyncFd<OwnedFd>>>,
+	fds: Vec<OwnedFd>,
 	dmatex: DmatexRef,
 	next_acquire_point: AtomicU64,
 }
@@ -74,25 +77,18 @@ impl DmabufBacking {
 				dmabuf_fd,
 				planes: _,
 			} => vec![
-				AsyncFd::new(
-					dmabuf_fd
-						.try_clone()
-						.map_err(DmatexImportError::DmabufFdCloneError)?,
-				)
-				.map_err(DmatexImportError::DmabufFdRegisterError)?,
-			]
-			.into(),
+				dmabuf_fd
+					.try_clone()
+					.map_err(DmatexImportError::DmabufFdCloneError)?,
+			],
 			DmatexPlanes::Disjoint { planes } => planes
 				.iter()
 				.map(|v| {
-					let fd = v
-						.dmabuf_fd
+					v.dmabuf_fd
 						.try_clone()
-						.map_err(DmatexImportError::DmabufFdCloneError)?;
-					AsyncFd::new(fd).map_err(DmatexImportError::DmabufFdRegisterError)
+						.map_err(DmatexImportError::DmabufFdCloneError)
 				})
-				.collect::<Result<Vec<_>, _>>()?
-				.into(),
+				.collect::<Result<Vec<_>, _>>()?,
 		};
 		let dmatex = DmatexRef::import(
 			client,
@@ -139,18 +135,42 @@ impl DmabufBacking {
 	pub fn update(&self) -> (DmatexRef, u64, u64) {
 		let acquire = self.next_acquire_point.fetch_add(1, Ordering::Relaxed);
 		let release = self.next_acquire_point.fetch_add(1, Ordering::Relaxed);
-		tokio::spawn({
-			let fds = self.fds.clone();
-			let timeline = self.timeline.clone();
-			async move {
-				for fd in fds.iter() {
-					_ = fd.readable().await;
-				}
-				unsafe {
-					_ = timeline.signal(acquire);
-				}
-			}
-		});
+		let acquire_syncfile = self
+			.fds
+			.iter()
+			.filter_map(|v| unsafe {
+				rustix::ioctl::ioctl(
+					v.as_fd(),
+					DmabufExportSyncFile {
+						flags: DmabufSyncFlags::DMA_BUF_SYNC_READ,
+						fd: -1,
+					},
+				)
+				.inspect_err(|err| tracing::error!("failed to export syncfile from dmabuf: {err}"))
+				.ok()
+			})
+			.reduce(|a, b| unsafe {
+				rustix::ioctl::ioctl(
+					a.as_fd(),
+					SyncFileMerge {
+						name: [0; _],
+						fd2: b.as_raw_fd(),
+						fence: -1,
+						flags: 0,
+						_pad: 0,
+					},
+				)
+				// TODO: remove this unwrap
+				.unwrap()
+			});
+		if let Some(acquire_syncfile) = acquire_syncfile {
+			_ = self
+				.timeline
+				.import_sync_file_point(acquire_syncfile, acquire)
+				.inspect_err(|err| {
+					tracing::error!("failed to import syncfile into timeline: {err}")
+				});
+		}
 		(self.dmatex.clone(), acquire, release)
 	}
 
@@ -206,6 +226,4 @@ pub enum DmatexImportError {
 	TimelineExportError(rustix::io::Errno),
 	#[error("Failed clone Dmabuf fd: {0}")]
 	DmabufFdCloneError(std::io::Error),
-	#[error("Failed to register Dmabuf fd with tokio: {0}")]
-	DmabufFdRegisterError(std::io::Error),
 }
