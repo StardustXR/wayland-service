@@ -55,14 +55,13 @@ pub async fn spawn_default_panel_shell(
 		toplevel: toplevel.clone(),
 	})
 	.ok()?;
-	let _fs_binding = RefFsBinding::new(
-		node_ref.proxy().to_ref(),
-		BaseDirs::new()?
-			.runtime_dir()?
-			.join("stardust-protected-panel-provider")
-			.join(name),
-	)
-	.ok()?;
+	let provider_dir = BaseDirs::new()?
+		.runtime_dir()?
+		.join("stardust-protected-panel-provider");
+	// nothing else creates this dir and the runtime dir is wiped every boot
+	std::fs::create_dir_all(&provider_dir).ok()?;
+	let _fs_binding =
+		RefFsBinding::new(node_ref.proxy().to_ref(), provider_dir.join(name)).ok()?;
 
 	protostar_launcher::launch(path_str.into(), vars).await;
 
