@@ -21,9 +21,6 @@ use waynest_server::Client as _;
 //   drop/leave are all no-ops or unused).
 // - The previous wl_data_source never gets its `cancelled` event when a new selection
 //   replaces it, so old clients think they still own the clipboard.
-// - Disconnected clients are never removed from CLIENTS, so the broadcast list only
-//   grows; sends to dead clients are silently dropped (mpsc errors are ignored) but the
-//   Vec leaks entries for the life of the process.
 // - Only one global clipboard selection is tracked (no per-seat scoping), and only one
 //   wl_data_device per client is supported (mirrors the existing single-seat/output
 //   assumption elsewhere in this codebase), the most recently created one wins.
@@ -50,6 +47,17 @@ static CLIPBOARD: Mutex<Option<ClipboardSelection>> = Mutex::new(None);
 
 pub fn register_client(sink: MessageSink) {
 	CLIENTS.lock().push(sink);
+}
+
+pub fn unregister_client(sink: &MessageSink) {
+	CLIENTS.lock().retain(|s| !s.same_channel(sink));
+	let cleared = CLIPBOARD
+		.lock()
+		.take_if(|s| s.owner.same_channel(sink))
+		.is_some();
+	if cleared {
+		broadcast_selection(None);
+	}
 }
 
 fn broadcast_selection(selection: Option<ClipboardSelection>) {

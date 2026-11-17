@@ -49,9 +49,9 @@ pub enum Message {
 	},
 	// TODO: this whole clipboard implementation is the bare minimum to get copy/paste
 	// working across clients. It's missing: cancelling the previous selection's
-	// wl_data_source (the `cancelled` event), removing disconnected clients from the
-	// broadcast list, drag-and-drop (wl_data_device.start_drag is still a no-op), and
-	// any kind of `dnd_action`/`finish` negotiation. See protocols/core/data_device.rs.
+	// wl_data_source (the `cancelled` event), drag-and-drop (wl_data_device.start_drag
+	// is still a no-op), and any kind of `dnd_action`/`finish` negotiation. See
+	// protocols/core/data_device.rs.
 	ClipboardSelection(Option<ClipboardSelection>),
 	ClipboardSend {
 		source: Arc<DataSource>,

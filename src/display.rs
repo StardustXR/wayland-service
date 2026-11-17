@@ -5,6 +5,7 @@ use crate::{
 	error::WaylandResult,
 	protocols::core::{
 		callback::{Callback, WlCallback},
+		data_device,
 		output::Output,
 		seat::Seat,
 	},
@@ -45,6 +46,11 @@ impl Display {
 	}
 	pub fn next_server_id(&self) -> ObjectId {
 		unsafe { ObjectId::from_raw(self.id_counter.get()) }
+	}
+}
+impl Drop for Display {
+	fn drop(&mut self) {
+		data_device::unregister_client(&self.message_sink);
 	}
 }
 impl WlDisplay for Display {
