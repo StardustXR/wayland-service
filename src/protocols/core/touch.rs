@@ -2,6 +2,7 @@ use mint::Vector2;
 use std::sync::Arc;
 use waynest::ObjectId;
 pub use waynest_protocols::server::core::wayland::wl_touch::*;
+use waynest_server::Client as _;
 
 use crate::{client::Client, error::WaylandResult, protocols::core::surface::Surface};
 
@@ -66,9 +67,10 @@ impl WlTouch for Touch {
 	/// https://wayland.app/protocols/wayland#wl_touch:request:release
 	async fn release(
 		&self,
-		_client: &mut Self::Connection,
-		_sender_id: ObjectId,
+		client: &mut Self::Connection,
+		sender_id: ObjectId,
 	) -> WaylandResult<()> {
+		client.remove(sender_id);
 		Ok(())
 	}
 }

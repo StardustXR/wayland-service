@@ -45,9 +45,10 @@ impl ZwpLinuxBufferParamsV1 for BufferParams {
 
 	async fn destroy(
 		&self,
-		_client: &mut Self::Connection,
-		_sender_id: ObjectId,
+		client: &mut Self::Connection,
+		sender_id: ObjectId,
 	) -> WaylandResult<()> {
+		client.remove(sender_id);
 		tracing::info!("Destroying BufferParams {:?}", self.id);
 		Ok(())
 	}

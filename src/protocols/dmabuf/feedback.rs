@@ -7,6 +7,7 @@ use std::{
 	sync::Arc,
 };
 use waynest::ObjectId;
+use waynest_server::Client as _;
 use waynest_protocols::server::stable::linux_dmabuf_v1::zwp_linux_dmabuf_feedback_v1::{
 	TrancheFlags, ZwpLinuxDmabufFeedbackV1,
 };
@@ -83,9 +84,10 @@ impl ZwpLinuxDmabufFeedbackV1 for DmabufFeedback {
 
 	async fn destroy(
 		&self,
-		_client: &mut Self::Connection,
-		_sender_id: ObjectId,
+		client: &mut Self::Connection,
+		sender_id: ObjectId,
 	) -> WaylandResult<()> {
+		client.remove(sender_id);
 		Ok(())
 	}
 }

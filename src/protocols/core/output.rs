@@ -1,5 +1,6 @@
 use crate::{client::Client, error::WaylandResult};
 use waynest::ObjectId;
+use waynest_server::Client as _;
 pub use waynest_protocols::server::core::wayland::wl_output::*;
 
 #[derive(Debug, waynest_server::RequestDispatcher)]
@@ -58,9 +59,10 @@ impl WlOutput for Output {
 	/// https://wayland.app/protocols/wayland#wl_output:request:release
 	async fn release(
 		&self,
-		_client: &mut Self::Connection,
-		_sender_id: ObjectId,
+		client: &mut Self::Connection,
+		sender_id: ObjectId,
 	) -> WaylandResult<()> {
+		client.remove(sender_id);
 		Ok(())
 	}
 }
