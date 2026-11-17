@@ -42,8 +42,9 @@ impl Output {
 			Mode::Current | Mode::Preferred,
 			2048,
 			2048,
-			// wayland reports this in millihertz apparently
-			2048 * 1000,
+			// only a hint, frame callbacks do the real pacing. the highest any headset runs at so
+			// frame limiters never cap below it, until stardust exposes the runtime's actual rate
+			144_000,
 		)
 		.await?;
 
