@@ -1,11 +1,10 @@
-use crate::error::WaylandResult;
-use waynest::Fixed;
-use waynest::ObjectId;
+use crate::{error::WaylandResult, protocols::core::surface::Surface};
+use stardust_xr_panels::panel_item::Rect;
+use std::sync::{Arc, Weak};
+use waynest::{Fixed, ObjectId};
 use waynest_protocols::server::stable::viewporter::wp_viewport::*;
 use waynest_protocols::server::stable::viewporter::wp_viewporter::*;
 use waynest_server::Client as _;
-
-// This is a barebones/stub no-op implementation of wp_viewporter to make xwayland apps work
 
 #[derive(Debug, waynest_server::RequestDispatcher)]
 #[waynest(error = crate::error::WaylandError, connection = crate::client::Client)]
@@ -38,7 +37,11 @@ impl WpViewporter for Viewporter {
 		id: ObjectId,
 		surface_id: ObjectId,
 	) -> WaylandResult<()> {
-		let viewport = Viewport::new(id, surface_id);
+		let surface = client
+			.get::<Surface>(surface_id)
+			.map(|s| Arc::downgrade(&s))
+			.unwrap_or_default();
+		let viewport = Viewport::new(id, surface);
 		client.insert(id, viewport)?;
 		Ok(())
 	}
@@ -48,15 +51,11 @@ impl WpViewporter for Viewporter {
 #[waynest(error = crate::error::WaylandError, connection = crate::client::Client)]
 pub struct Viewport {
 	id: ObjectId,
-	_surface_id: ObjectId,
+	surface: Weak<Surface>,
 }
-
 impl Viewport {
-	pub fn new(id: ObjectId, surface_id: ObjectId) -> Self {
-		Self {
-			id,
-			_surface_id: surface_id,
-		}
+	pub fn new(id: ObjectId, surface: Weak<Surface>) -> Self {
+		Self { id, surface }
 	}
 }
 
@@ -68,6 +67,11 @@ impl WpViewport for Viewport {
 		client: &mut Self::Connection,
 		_sender_id: ObjectId,
 	) -> WaylandResult<()> {
+		if let Some(surface) = self.surface.upgrade() {
+			let mut state = surface.state_lock();
+			state.pending.viewport_src = None;
+			state.pending.viewport_dst = None;
+		}
 		client.remove(self.id);
 		Ok(())
 	}
@@ -76,11 +80,20 @@ impl WpViewport for Viewport {
 		&self,
 		_client: &mut Self::Connection,
 		_sender_id: ObjectId,
-		_x: Fixed,
-		_y: Fixed,
-		_width: Fixed,
-		_height: Fixed,
+		x: Fixed,
+		y: Fixed,
+		width: Fixed,
+		height: Fixed,
 	) -> WaylandResult<()> {
+		let Some(surface) = self.surface.upgrade() else {
+			return Ok(());
+		};
+		let [x, y, w, h] = [x, y, width, height].map(|v| f64::from(v) as f32);
+		// all -1 unsets it
+		surface.state_lock().pending.viewport_src = (w >= 0.0).then(|| Rect {
+			origin: [x, y].into(),
+			size: [w, h].into(),
+		});
 		Ok(())
 	}
 
@@ -88,9 +101,14 @@ impl WpViewport for Viewport {
 		&self,
 		_client: &mut Self::Connection,
 		_sender_id: ObjectId,
-		_width: i32,
-		_height: i32,
+		width: i32,
+		height: i32,
 	) -> WaylandResult<()> {
+		let Some(surface) = self.surface.upgrade() else {
+			return Ok(());
+		};
+		surface.state_lock().pending.viewport_dst =
+			(width > 0 && height > 0).then(|| [width as u32, height as u32].into());
 		Ok(())
 	}
 }

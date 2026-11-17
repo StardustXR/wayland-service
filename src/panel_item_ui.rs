@@ -29,7 +29,7 @@ use stardust_xr_molecules::{
 };
 use stardust_xr_panels::{
 	panel_item::{
-		ChildState, Geometry, PanelItem, PanelShell, PanelShellHandler, SurfaceUpdateTarget,
+		ChildState, Geometry, PanelItem, PanelShell, PanelShellHandler, Rect, SurfaceUpdateTarget,
 	},
 	panel_item_acceptor::PanelItemAcceptor,
 };
@@ -222,7 +222,7 @@ impl PanelItemUi {
 		let client = CLIENT.wait();
 		let size = toplevel
 			.wl_surface()
-			.current_buffer_size()
+			.current_size()
 			.unwrap_or([1, 1].into());
 		let (root, root_ref) = Spatial::new(client, &at, Transform::IDENTITY).await?;
 		root.set_parent_in_place(client.root().clone())?;
@@ -405,6 +405,7 @@ impl PanelShellHandler for PanelItemUi {
 		acquire_point: u64,
 		release_point: DmatexSubmitRelease,
 		opaque: bool,
+		src: Option<Rect>,
 	) {
 		// TODO: remove this when children are implemented
 		if !matches!(surface, SurfaceUpdateTarget::Toplevel) {
@@ -418,6 +419,18 @@ impl PanelShellHandler for PanelItemUi {
 		_ = self
 			.part
 			.set_material_parameter("unlit", MaterialParameter::Bool { value: true })
+			.await;
+		let src = src.unwrap_or(Rect {
+			origin: [0.0; 2].into(),
+			size: [1.0; 2].into(),
+		});
+		_ = self
+			.part
+			.set_material_parameter("uv_offset", MaterialParameter::Vec2 { value: src.origin })
+			.await;
+		_ = self
+			.part
+			.set_material_parameter("uv_scale", MaterialParameter::Vec2 { value: src.size })
 			.await;
 		if let Err(e) = self
 			.part

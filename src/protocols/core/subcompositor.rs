@@ -162,7 +162,7 @@ impl Subsurface {
 				if surface.currently_has_valid_buffer() {
 					let toplevel = parent.toplevel.read().clone();
 					*surface.toplevel.write() = toplevel;
-					let Some(info) = subsurface.create_child_info(surface.current_buffer_size())
+					let Some(info) = subsurface.create_child_info(surface.current_size())
 					else {
 						return false;
 					};
@@ -194,7 +194,7 @@ impl Subsurface {
 				let subsurface_state = *state.current();
 				drop(state);
 				let size: Vector2<_> = surface
-					.current_buffer_size()
+					.current_size()
 					.map(|b| [b.x as u32, b.y as u32].into())
 					.unwrap_or([0; 2].into());
 

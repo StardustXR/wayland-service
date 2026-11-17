@@ -16,7 +16,7 @@ use crate::{
 use gluon_ipc::Node;
 use mint::Vector2;
 use parking_lot::{Mutex, RwLock};
-use stardust_xr_panels::panel_item::{Geometry, SurfaceUpdateTarget};
+use stardust_xr_panels::panel_item::{Geometry, Rect, SurfaceUpdateTarget};
 use std::{
 	fmt::Display,
 	sync::{Arc, OnceLock, Weak},
@@ -55,6 +55,11 @@ pub struct SurfaceState {
 	pub geometry: Option<Geometry>,
 	pub min_size: Option<Vector2<u32>>,
 	pub max_size: Option<Vector2<u32>>,
+
+	/// both in surface coords, so buffer pixels / density
+	pub viewport_src: Option<Rect>,
+	pub viewport_dst: Option<Vector2<u32>>,
+
 	frame_callbacks: Vec<Arc<Callback>>,
 }
 impl Default for SurfaceState {
@@ -65,6 +70,8 @@ impl Default for SurfaceState {
 			geometry: None,
 			min_size: None,
 			max_size: None,
+			viewport_src: None,
+			viewport_dst: None,
 			frame_callbacks: Vec::new(),
 		}
 	}
@@ -76,6 +83,8 @@ impl BufferedState for SurfaceState {
 		self.geometry = pending.geometry;
 		self.min_size = pending.min_size;
 		self.max_size = pending.max_size;
+		self.viewport_src = pending.viewport_src;
+		self.viewport_dst = pending.viewport_dst;
 		self.frame_callbacks.append(&mut pending.frame_callbacks);
 	}
 
@@ -86,6 +95,8 @@ impl BufferedState for SurfaceState {
 			geometry: self.geometry,
 			min_size: self.min_size,
 			max_size: self.max_size,
+			viewport_src: self.viewport_src,
+			viewport_dst: self.viewport_dst,
 			frame_callbacks: Vec::new(),
 		}
 	}
@@ -95,6 +106,26 @@ impl SurfaceState {
 		self.buffer
 			.as_ref()
 			.is_some_and(|b| b.size().x > 0 && b.size().y > 0)
+	}
+	/// in buffer pixels like everything else here, with the viewport's crop and scale applied
+	pub fn size(&self) -> Option<Vector2<usize>> {
+		let d = self.density;
+		if let Some(dst) = self.viewport_dst {
+			return Some([(dst.x as f32 * d) as usize, (dst.y as f32 * d) as usize].into());
+		}
+		if let Some(src) = self.viewport_src {
+			return Some([(src.size.x * d) as usize, (src.size.y * d) as usize].into());
+		}
+		self.buffer.as_ref().map(|b| b.size())
+	}
+	pub fn uv_src(&self) -> Option<Rect> {
+		let src = self.viewport_src?;
+		let b = self.buffer.as_ref()?.size();
+		let (w, h) = (b.x as f32 / self.density, b.y as f32 / self.density);
+		Some(Rect {
+			origin: [src.origin.x / w, src.origin.y / h].into(),
+			size: [src.size.x / w, src.size.y / h].into(),
+		})
 	}
 }
 
@@ -313,13 +344,8 @@ impl Surface {
 	// }
 
 	#[tracing::instrument("debug", skip_all)]
-	pub fn current_buffer_size(&self) -> Option<Vector2<usize>> {
-		self.state
-			.lock()
-			.current()
-			.buffer
-			.as_ref()
-			.map(|b| b.size())
+	pub fn current_size(&self) -> Option<Vector2<usize>> {
+		self.state.lock().current().size()
 	}
 	#[tracing::instrument("debug", skip_all)]
 	pub fn current_buffer_usage(&self) -> Option<Arc<Buffer>> {
@@ -417,7 +443,11 @@ impl Surface {
 }
 impl Surface {
 	pub(super) fn buffer_update(&self) {
-		if let Some(buffer) = self.state.lock().current().buffer.as_ref()
+		let (buffer, src) = {
+			let state = self.state.lock();
+			(state.current().buffer.clone(), state.current().uv_src())
+		};
+		if let Some(buffer) = buffer
 			&& let Some(submit) = buffer.update()
 		{
 			if let Some(panel_item) = self.panel_item()
@@ -430,6 +460,7 @@ impl Surface {
 						submit.acquire(),
 						submit.release(),
 						!buffer.is_transparent(),
+						src,
 					) {
 					tracing::error!("failed to send surface update to panel shell: {e}");
 				}
@@ -452,6 +483,7 @@ impl Surface {
 					submit.acquire(),
 					submit.release(),
 					!submit.buffer().is_transparent(),
+					self.state.lock().current().uv_src(),
 				) {
 				tracing::error!("failed to send surface update to panel shell: {e}");
 			}
@@ -474,6 +506,7 @@ impl Surface {
 						submit.acquire(),
 						submit.release(),
 						!submit.buffer().is_transparent(),
+						self.state.lock().current().uv_src(),
 					) {
 					tracing::error!("failed to send surface update to panel shell: {e}");
 				}

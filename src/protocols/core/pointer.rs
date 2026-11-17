@@ -336,7 +336,7 @@ impl WlPointer for Pointer {
 			&& let Some(panel_item) = focused_surface.panel_item()
 		{
 			let geometry = surface.and_then(|s| client.get::<Surface>(s)).map(|s| {
-				let size = s.current_buffer_size().unwrap_or([16; 2].into());
+				let size = s.current_size().unwrap_or([16; 2].into());
 				Geometry {
 					origin: Vector2::from([hotspot_x, hotspot_y]),
 					size: Vector2::from([size.x as u32, size.y as u32]),

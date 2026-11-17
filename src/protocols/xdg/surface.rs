@@ -156,7 +156,7 @@ impl XdgSurface for Surface {
 			drop(mapped_lock);
 			if let Some(panel_item) = toplevel.panel_item() {
 				let size_lock = toplevel.last_committed_res.lock();
-				if let Some(size) = surface.current_buffer_size()
+				if let Some(size) = surface.current_size()
 					&& size_lock.is_none_or(|v| v != size)
 				{
 					if let Some(shell) = panel_item.panel_shell() {
