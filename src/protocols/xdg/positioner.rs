@@ -183,7 +183,6 @@ impl XdgPositioner for Positioner {
 			x: width.max(0) as u32,
 			y: height.max(0) as u32,
 		};
-		data.offset = [0, 0].into();
 		Ok(())
 	}
 
@@ -227,9 +226,7 @@ impl XdgPositioner for Positioner {
 		_x: i32,
 		_y: i32,
 	) -> WaylandResult<()> {
-		let mut data = self.data.lock();
-		data.offset.x += _x;
-		data.offset.y += _y;
+		self.data.lock().offset = [_x, _y].into();
 		Ok(())
 	}
 
