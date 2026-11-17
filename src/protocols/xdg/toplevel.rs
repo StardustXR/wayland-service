@@ -352,6 +352,7 @@ impl XdgToplevel for Toplevel {
 	) -> WaylandResult<()> {
 		client.remove(self.id);
 		self.mapped.lock().take();
+		self.wl_surface().retire_role();
 		Ok(())
 	}
 }

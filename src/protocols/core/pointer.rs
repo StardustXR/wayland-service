@@ -1,6 +1,9 @@
 use super::surface::SurfaceRole;
 use crate::protocols::{core::surface::Surface, relative_pointer::RelativePointer};
-use crate::{client::Client, error::WaylandResult};
+use crate::{
+	client::Client,
+	error::{WaylandError, WaylandResult},
+};
 use mint::Vector2;
 use stardust_xr_panels::panel_item::{Geometry, ScrollSource};
 use std::sync::Arc;
@@ -356,8 +359,12 @@ impl WlPointer for Pointer {
 		};
 
 		surface
-			.try_set_role(SurfaceRole::Cursor, Error::Role)
-			.await?;
+			.assign_role(SurfaceRole::Cursor)
+			.map_err(|_| WaylandError::Fatal {
+				object_id: self.id,
+				code: Error::Role as u32,
+				message: "cursor surface already has another role",
+			})?;
 		_ = surface
 			.surface_id
 			.set(stardust_xr_panels::panel_item::SurfaceUpdateTarget::Cursor);

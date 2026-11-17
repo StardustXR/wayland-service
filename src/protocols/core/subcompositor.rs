@@ -5,9 +5,7 @@ use crate::util::{BufferedState, SurfaceCommitAwareBuffer};
 use mint::Vector2;
 use parking_lot::Mutex;
 use rand::random;
-use stardust_xr_panels::panel_item::{
-	ChildState, Geometry, Rect, SurfaceId, SurfaceUpdateTarget,
-};
+use stardust_xr_panels::panel_item::{ChildState, Geometry, Rect, SurfaceId, SurfaceUpdateTarget};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use waynest::ObjectId;
@@ -36,7 +34,7 @@ impl WlSubcompositor for Subcompositor {
 	async fn get_subsurface(
 		&self,
 		client: &mut Self::Connection,
-		_sender_id: ObjectId,
+		sender_id: ObjectId,
 		id: ObjectId,
 		surface_id: ObjectId,
 		parent_id: ObjectId,
@@ -59,8 +57,12 @@ impl WlSubcompositor for Subcompositor {
 
 		// Set the subsurface role
 		surface
-			.try_set_role(SurfaceRole::Subsurface, wl_subcompositor::Error::BadSurface)
-			.await?;
+			.assign_role(SurfaceRole::Subsurface)
+			.map_err(|_| WaylandError::Fatal {
+				object_id: sender_id,
+				code: wl_subcompositor::Error::BadSurface as u32,
+				message: "surface already has a role",
+			})?;
 
 		// Create the subsurface
 		let subsurface = Arc::new(Subsurface::new(id, surface.clone(), parent.clone()));
@@ -123,7 +125,7 @@ impl Subsurface {
 		if !self.is_sync.load(Ordering::Acquire) {
 			// We're desync, but check if parent is a synchronized subsurface
 			if let Some(parent) = self.surface.parent()
-				&& parent.role.get() == Some(&SurfaceRole::Subsurface)
+				&& parent.plays(SurfaceRole::Subsurface)
 			{
 				// Parent is a subsurface - we inherit synchronized behavior
 				// TODO: Could walk the chain recursively for perfect correctness
@@ -150,7 +152,7 @@ impl Subsurface {
 		self.surface
 			.add_updated_current_state_handler(move |surface| {
 				let Some(subsurface) = subsurface_weak.upgrade() else {
-					return true;
+					return false;
 				};
 				let Some(parent) = subsurface.surface.parent() else {
 					return true;
@@ -162,8 +164,7 @@ impl Subsurface {
 				if surface.currently_has_valid_buffer() {
 					let toplevel = parent.toplevel.read().clone();
 					*surface.toplevel.write() = toplevel;
-					let Some(info) = subsurface.create_child_info(surface.current_size())
-					else {
+					let Some(info) = subsurface.create_child_info(surface.current_size()) else {
 						return false;
 					};
 					panel_item.add_child(&subsurface.surface, info);
@@ -174,7 +175,7 @@ impl Subsurface {
 		let subsurface_weak = Arc::downgrade(self);
 		self.surface.add_commit_handler(move |_| {
 			let Some(subsurface) = subsurface_weak.upgrade() else {
-				return true;
+				return false;
 			};
 			subsurface.state.lock().apply();
 			true
@@ -183,7 +184,7 @@ impl Subsurface {
 		let subsurface_weak = Arc::downgrade(self);
 		self.surface.add_updated_current_state_handler(move |_| {
 			let Some(subsurface) = subsurface_weak.upgrade() else {
-				return true;
+				return false;
 			};
 			let surface = subsurface.surface.clone();
 
@@ -270,16 +271,15 @@ impl WlSubsurface for Subsurface {
 		_sender_id: ObjectId,
 	) -> WaylandResult<()> {
 		// Remove the child from the parent's backend
-		if let Some(parent) = self.surface.parent() {
-			let Some(panel_item) = parent.panel_item() else {
-				client.remove(self.id);
-				return Ok(());
-			};
+		if let Some(parent) = self.surface.parent()
+			&& let Some(panel_item) = parent.panel_item()
+		{
 			panel_item.remove_child(&self.surface);
 		}
 
 		// Clear the commit filter
 		self.surface.clear_parent_syncronized_filter();
+		self.surface.retire_role();
 
 		client.remove(self.id);
 		Ok(())

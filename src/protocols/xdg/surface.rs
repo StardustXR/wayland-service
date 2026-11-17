@@ -4,7 +4,10 @@ use crate::{
 	default_panel_shell::spawn_default_panel_shell,
 	error::{WaylandError, WaylandResult},
 	panel_item_ui::PanelItemUi,
-	protocols::{core::surface::SurfaceRole, xdg::toplevel::Toplevel},
+	protocols::{
+		core::surface::{RoleError, SurfaceRole},
+		xdg::toplevel::Toplevel,
+	},
 	util::get_env,
 };
 
@@ -14,8 +17,10 @@ use stardust_xr_fusion::spatial::{Spatial, SpatialExt as _, Transform};
 use stardust_xr_panels::panel_item::{ChildState, Rect, SurfaceId, SurfaceUpdateTarget};
 use std::sync::Arc;
 use waynest::ObjectId;
-use waynest_protocols::server::stable::xdg_shell::xdg_popup::XdgPopup;
 pub use waynest_protocols::server::stable::xdg_shell::xdg_surface::*;
+use waynest_protocols::server::stable::xdg_shell::{
+	xdg_popup::XdgPopup, xdg_wm_base::Error as WmBaseError,
+};
 use waynest_server::Client as _;
 
 #[derive(Debug, waynest_server::RequestDispatcher)]
@@ -43,6 +48,21 @@ impl Surface {
 		}
 	}
 
+	fn role_error(&self, e: RoleError) -> WaylandError {
+		match e {
+			RoleError::Occupied => WaylandError::Fatal {
+				object_id: self.id,
+				code: Error::AlreadyConstructed as u32,
+				message: "xdg_surface already has a role object",
+			},
+			RoleError::Mismatch => WaylandError::Fatal {
+				object_id: self.wm_base,
+				code: WmBaseError::Role as u32,
+				message: "wl_surface already has a different role",
+			},
+		}
+	}
+
 	pub async fn reconfigure(&self, client: &mut Client) -> WaylandResult<()> {
 		let serial = client.next_event_serial();
 		self.configure(client, self.id, serial).await
@@ -58,6 +78,11 @@ impl XdgSurface for Surface {
 		client: &mut Self::Connection,
 		_sender_id: ObjectId,
 	) -> WaylandResult<()> {
+		self.wl_surface.end_xdg().map_err(|_| WaylandError::Fatal {
+			object_id: self.id,
+			code: Error::DefunctRoleObject as u32,
+			message: "xdg_surface destroyed before its role object",
+		})?;
 		client.remove(self.id);
 		Ok(())
 	}
@@ -69,6 +94,10 @@ impl XdgSurface for Surface {
 		sender_id: ObjectId,
 		toplevel_id: ObjectId,
 	) -> WaylandResult<()> {
+		self.wl_surface
+			.assign_role(SurfaceRole::XdgToplevel)
+			.map_err(|e| self.role_error(e))?;
+
 		let toplevel = client.insert(
 			toplevel_id,
 			Toplevel::new(
@@ -77,10 +106,6 @@ impl XdgSurface for Surface {
 				client.try_get::<Self>(sender_id)?,
 			),
 		)?;
-
-		self.wl_surface
-			.try_set_role(SurfaceRole::XdgToplevel, Error::AlreadyConstructed)
-			.await?;
 
 		let toplevel_weak = Arc::downgrade(&toplevel);
 		let display = client.display()?;
@@ -92,7 +117,7 @@ impl XdgSurface for Surface {
 		*self.wl_surface.toplevel.write() = toplevel_weak.clone();
 		self.wl_surface.add_commit_handler(move |surface| {
 			let Some(toplevel) = toplevel_weak.upgrade() else {
-				return true;
+				return false;
 			};
 
 			if first_commit {
@@ -186,8 +211,8 @@ impl XdgSurface for Surface {
 		positioner: ObjectId,
 	) -> WaylandResult<()> {
 		self.wl_surface
-			.try_set_role(SurfaceRole::XdgPopup, Error::AlreadyConstructed)
-			.await?;
+			.assign_role(SurfaceRole::XdgPopup)
+			.map_err(|e| self.role_error(e))?;
 
 		let Some(parent) = parent else {
 			return Err(WaylandError::Fatal {
@@ -262,7 +287,7 @@ impl XdgSurface for Surface {
 		let configured = self.configured.clone();
 		self.wl_surface.add_commit_handler(move |surface| {
 			let Some(popup) = popup_weak.upgrade() else {
-				return true;
+				return false;
 			};
 			let Some(panel_item) = surface.panel_item() else {
 				return true;

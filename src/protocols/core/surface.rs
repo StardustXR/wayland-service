@@ -1,7 +1,7 @@
 use super::{buffer::Buffer, callback::Callback};
 use crate::{
 	client::{Client, Message, MessageSink},
-	error::{WaylandError, WaylandResult},
+	error::WaylandResult,
 	frame_dispatcher::FRAME_EVENT_PROVIDER,
 	protocols::{
 		core::buffer::BufferSubmit,
@@ -46,6 +46,70 @@ impl Display for SurfaceRole {
 			SurfaceRole::XdgPopup => f.write_str("SurfaceRole::XdgPopup"),
 		}
 	}
+}
+impl SurfaceRole {
+	fn is_xdg(self) -> bool {
+		matches!(self, Self::XdgToplevel | Self::XdgPopup)
+	}
+}
+
+/// a wl_surface keeps its role for life, but the object playing it can come and go,
+/// so the same role can be picked back up once the last one retired
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RoleState {
+	Unassigned,
+	/// an xdg_surface exists but hasn't made its role object yet,
+	/// carrying the xdg role this surface already had if any
+	XdgSurface(Option<SurfaceRole>),
+	Playing(SurfaceRole),
+	Retired(SurfaceRole),
+}
+impl RoleState {
+	fn begin_xdg(self) -> Result<Self, RoleError> {
+		match self {
+			Self::Unassigned => Ok(Self::XdgSurface(None)),
+			Self::Retired(r) if r.is_xdg() => Ok(Self::XdgSurface(Some(r))),
+			Self::XdgSurface(_) | Self::Playing(_) => Err(RoleError::Occupied),
+			Self::Retired(_) => Err(RoleError::Mismatch),
+		}
+	}
+	fn assign(self, role: SurfaceRole) -> Result<Self, RoleError> {
+		match self {
+			// a cursor has no role object, so setting it again is just setting it again
+			Self::Playing(SurfaceRole::Cursor) if role == SurfaceRole::Cursor => Ok(self),
+			Self::Playing(r) if r == role => Err(RoleError::Occupied),
+			Self::XdgSurface(prev) if role.is_xdg() && prev.is_none_or(|p| p == role) => {
+				Ok(Self::Playing(role))
+			}
+			Self::Unassigned if !role.is_xdg() => Ok(Self::Playing(role)),
+			Self::Retired(r) if r == role && !role.is_xdg() => Ok(Self::Playing(role)),
+			_ => Err(RoleError::Mismatch),
+		}
+	}
+	// the xdg_surface outlives its role object, so xdg roles fall back to it
+	fn retire(self) -> Self {
+		match self {
+			Self::Playing(r) if r.is_xdg() => Self::XdgSurface(Some(r)),
+			Self::Playing(r) => Self::Retired(r),
+			other => other,
+		}
+	}
+	fn end_xdg(self) -> Result<Self, RoleError> {
+		match self {
+			Self::XdgSurface(Some(r)) => Ok(Self::Retired(r)),
+			Self::XdgSurface(None) => Ok(Self::Unassigned),
+			Self::Playing(_) => Err(RoleError::Occupied),
+			other => Ok(other),
+		}
+	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RoleError {
+	/// a role object is still alive on this surface
+	Occupied,
+	/// the surface already has a different role, and roles are forever
+	Mismatch,
 }
 
 #[derive(Debug)]
@@ -141,7 +205,7 @@ pub struct Surface {
 	pub surface_id: OnceLock<SurfaceUpdateTarget>,
 	state: Arc<Mutex<SurfaceCommitAwareBuffer<SurfaceState>>>,
 	pub message_sink: MessageSink,
-	pub role: OnceLock<SurfaceRole>,
+	role: Mutex<RoleState>,
 	// pub panel_item: Mutex<Weak<BinderObject<XdgBackend>>>,
 	// pub panel_item: Mutex<Weak<PanelItem>>,
 	requires_parent_sync: Mutex<Option<CommitFilter>>,
@@ -188,7 +252,7 @@ impl Surface {
 					manager.clone(),
 				),
 				message_sink,
-				role: OnceLock::new(),
+				role: Mutex::new(RoleState::Unassigned),
 				requires_parent_sync: Mutex::new(None),
 				on_commit_handlers: Mutex::new(Vec::new()),
 				on_updated_current_state_handlers: Mutex::new(Vec::new()),
@@ -230,28 +294,29 @@ impl Surface {
 		Ok(surface)
 	}
 
-	pub async fn try_set_role(
+	fn transition_role(
 		&self,
-		role: SurfaceRole,
-		role_error: impl Into<u32>,
-	) -> WaylandResult<()> {
-		match self.role.get().cloned() {
-			Some(current_role) => {
-				if current_role == role {
-					Ok(())
-				} else {
-					Err(WaylandError::Fatal {
-						object_id: self.id,
-						code: role_error.into(),
-						message: "Surface has an incomparible role",
-					})
-				}
-			}
-			None => {
-				let _ = self.role.set(role);
-				Ok(())
-			}
-		}
+		f: impl FnOnce(RoleState) -> Result<RoleState, RoleError>,
+	) -> Result<(), RoleError> {
+		let mut role = self.role.lock();
+		*role = f(*role)?;
+		Ok(())
+	}
+	pub fn begin_xdg(&self) -> Result<(), RoleError> {
+		self.transition_role(RoleState::begin_xdg)
+	}
+	pub fn assign_role(&self, role: SurfaceRole) -> Result<(), RoleError> {
+		self.transition_role(|s| s.assign(role))
+	}
+	pub fn retire_role(&self) {
+		let mut role = self.role.lock();
+		*role = role.retire();
+	}
+	pub fn end_xdg(&self) -> Result<(), RoleError> {
+		self.transition_role(RoleState::end_xdg)
+	}
+	pub fn plays(&self, role: SurfaceRole) -> bool {
+		*self.role.lock() == RoleState::Playing(role)
 	}
 
 	#[tracing::instrument(level = "debug", skip_all)]
@@ -415,7 +480,7 @@ impl Surface {
 	}
 
 	pub fn requires_surface_syncronization(&self) -> bool {
-		if self.role.get() != Some(&SurfaceRole::Subsurface) {
+		if !self.plays(SurfaceRole::Subsurface) {
 			return false;
 		};
 		self.requires_parent_sync
@@ -691,8 +756,42 @@ impl WlSurface for Surface {
 		Ok(())
 	}
 }
-impl Drop for Surface {
-	fn drop(&mut self) {
-		self.role.take();
+
+#[cfg(test)]
+mod tests {
+	use super::{RoleError, RoleState, SurfaceRole::*};
+
+	#[test]
+	fn reshown_popup() {
+		let s = RoleState::Unassigned.begin_xdg().unwrap();
+		let s = s.assign(XdgPopup).unwrap().retire().end_xdg().unwrap();
+		assert_eq!(s, RoleState::Retired(XdgPopup));
+		let s = s.begin_xdg().unwrap();
+		assert_eq!(s.assign(XdgPopup), Ok(RoleState::Playing(XdgPopup)));
+		assert_eq!(s.assign(XdgToplevel), Err(RoleError::Mismatch));
+	}
+
+	#[test]
+	fn live_role_blocks() {
+		let s = RoleState::Unassigned.begin_xdg().unwrap();
+		assert_eq!(s.begin_xdg(), Err(RoleError::Occupied));
+		let s = s.assign(XdgToplevel).unwrap();
+		assert_eq!(s.assign(XdgToplevel), Err(RoleError::Occupied));
+		assert_eq!(s.end_xdg(), Err(RoleError::Occupied));
+		assert_eq!(s.begin_xdg(), Err(RoleError::Occupied));
+	}
+
+	#[test]
+	fn roles_dont_switch() {
+		let sub = RoleState::Unassigned.assign(Subsurface).unwrap();
+		assert_eq!(sub.retire().begin_xdg(), Err(RoleError::Mismatch));
+		assert_eq!(sub.retire().assign(Subsurface), Ok(sub));
+		assert_eq!(sub.retire().assign(Cursor), Err(RoleError::Mismatch));
+		let cursor = RoleState::Unassigned.assign(Cursor).unwrap();
+		assert_eq!(cursor.assign(Cursor), Ok(cursor));
+		assert_eq!(
+			RoleState::Unassigned.assign(XdgPopup),
+			Err(RoleError::Mismatch)
+		);
 	}
 }

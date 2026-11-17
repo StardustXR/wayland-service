@@ -51,16 +51,11 @@ impl XdgWmBase for WmBase {
 	) -> WaylandResult<()> {
 		let wl_surface =
 			client.try_get::<crate::protocols::core::surface::Surface>(wl_surface_id)?;
-		match wl_surface.role.get() {
-			None => (),
-			Some(_) => {
-				return Err(WaylandError::Fatal {
-					object_id: wl_surface_id,
-					code: Error::Role as u32,
-					message: "Wayland surface has role",
-				});
-			}
-		};
+		wl_surface.begin_xdg().map_err(|_| WaylandError::Fatal {
+			object_id: self.id,
+			code: Error::Role as u32,
+			message: "wl_surface already has a non xdg role or a live xdg_surface",
+		})?;
 		let xdg_surface = Surface::new(xdg_surface_id, self.version, self.id, wl_surface);
 		client.insert(xdg_surface_id, xdg_surface)?;
 

@@ -94,6 +94,7 @@ impl XdgPopup for Popup {
 		_sender_id: ObjectId,
 	) -> WaylandResult<()> {
 		client.remove(self.id);
+		self.surface.wl_surface.retire_role();
 		Ok(())
 	}
 }
