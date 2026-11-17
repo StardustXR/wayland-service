@@ -145,7 +145,10 @@ impl Pointer {
 			},
 		)
 		.await?;
-		self.frame(client, self.id).await
+		if self.version >= 5 {
+			self.frame(client, self.id).await?;
+		}
+		Ok(())
 	}
 	pub async fn handle_pointer_scroll_discrete(
 		&self,
@@ -326,7 +329,9 @@ impl Pointer {
 		if client.holds(old_surface.id, &*old_surface) {
 			let serial = client.next_event_serial();
 			self.leave(client, self.id, serial, old_surface.id).await?;
-			self.frame(client, self.id).await?;
+			if self.version >= 5 {
+				self.frame(client, self.id).await?;
+			}
 		}
 		*focused = Weak::new();
 		Ok(())
