@@ -17,8 +17,8 @@ use waynest_server::Client as _;
 // TODO: this is the most barebones possible implementation of clipboard support (copy
 // and paste of a single selection), just enough for one client to set a selection and
 // another to read it. Known gaps, in rough order of how much they'll bite:
-// - Drag-and-drop is entirely unimplemented (start_drag, actions/action, enter/motion/
-//   drop/leave are all no-ops or unused).
+// - Drag-and-drop is unimplemented, start_drag cancels the source immediately and
+//   actions/action, enter/motion/drop/leave are all no-ops or unused.
 // - Only one global clipboard selection is tracked (no per-seat scoping), and only one
 //   wl_data_device per client is supported (mirrors the existing single-seat/output
 //   assumption elsewhere in this codebase), the most recently created one wins.
@@ -164,14 +164,20 @@ impl WlDataDevice for DataDevice {
 
 	async fn start_drag(
 		&self,
-		_client: &mut Self::Connection,
+		client: &mut Self::Connection,
 		_sender_id: ObjectId,
-		_source: Option<ObjectId>,
+		source: Option<ObjectId>,
 		_origin: ObjectId,
 		_icon: Option<ObjectId>,
 		_serial: u32,
 	) -> WaylandResult<()> {
-		// TODO: drag-and-drop isn't implemented at all.
+		// drag-and-drop isn't supported, so end the drag before it starts
+		if let Some(source) = source {
+			client
+				.try_get::<DataSource>(source)?
+				.cancelled(client, source)
+				.await?;
+		}
 		Ok(())
 	}
 
