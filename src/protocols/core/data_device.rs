@@ -25,7 +25,7 @@ use waynest_server::Client as _;
 //   Vec leaks entries for the life of the process.
 // - Only one global clipboard selection is tracked (no per-seat scoping), and only one
 //   wl_data_device per client is supported (mirrors the existing single-seat/output
-//   assumption elsewhere in this codebase via Display's OnceLocks).
+//   assumption elsewhere in this codebase), the most recently created one wins.
 // - set_selection with `source: None` (clearing the selection) doesn't notify anyone.
 // - No serial validation anywhere.
 //
@@ -80,7 +80,7 @@ impl WlDataDeviceManager for DataDeviceManager {
 		_seat: ObjectId,
 	) -> WaylandResult<()> {
 		client.insert(id, DataDevice { id })?;
-		let _ = client.display()?.data_device.set(id);
+		*client.display()?.data_device.lock() = Some(id);
 
 		// If a clipboard selection already exists, hand this brand-new device an offer
 		// for it immediately, otherwise it'd never find out about the current selection.
@@ -196,6 +196,7 @@ impl WlDataDevice for DataDevice {
 		client: &mut Self::Connection,
 		_sender_id: ObjectId,
 	) -> WaylandResult<()> {
+		client.display()?.data_device.lock().take_if(|id| *id == self.id);
 		client.remove(self.id);
 		Ok(())
 	}
@@ -241,7 +242,7 @@ pub async fn handle_message(client: &mut Client, message: Message) -> WaylandRes
 			mime_types,
 			owner,
 		} => {
-			let device_id = client.display()?.data_device.get().copied();
+			let device_id = *client.display()?.data_device.lock();
 			if let Some(device_id) = device_id {
 				offer_selection(client, device_id, source, mime_types, owner).await?;
 			}
