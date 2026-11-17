@@ -23,6 +23,7 @@ use waynest_server::Client as _;
 pub struct Surface {
 	id: ObjectId,
 	version: u32,
+	pub wm_base: ObjectId,
 	pub wl_surface: Arc<crate::protocols::core::surface::Surface>,
 	configured: Arc<std::sync::atomic::AtomicBool>,
 }
@@ -30,11 +31,13 @@ impl Surface {
 	pub fn new(
 		id: ObjectId,
 		version: u32,
+		wm_base: ObjectId,
 		wl_surface: Arc<crate::protocols::core::surface::Surface>,
 	) -> Self {
 		Self {
 			id,
 			version,
+			wm_base,
 			wl_surface,
 			configured: Arc::new(std::sync::atomic::AtomicBool::new(false)),
 		}
@@ -203,16 +206,18 @@ impl XdgSurface for Surface {
 		let toplevel = parent.wl_surface.toplevel.read().clone();
 		*self.wl_surface.toplevel.write() = toplevel;
 
-		let positioner = client.try_get::<Positioner>(positioner)?;
+		let positioner = client
+			.try_get::<Positioner>(positioner)?
+			.complete(self.wm_base)?;
 
 		let surface = client.try_get::<Surface>(self.id)?;
 
 		let popup = client.insert(
 			popup_id,
-			Popup::new(self.version, surface, &positioner, popup_id),
+			Popup::new(self.version, surface, positioner, popup_id),
 		)?;
 
-		let positioner_geometry = positioner.data().infinite_geometry();
+		let positioner_geometry = positioner.infinite_geometry();
 
 		popup
 			.configure(
@@ -245,7 +250,7 @@ impl XdgSurface for Surface {
 		let child_info = ChildState {
 			id: *id,
 			parent: parent_id,
-			geometry: positioner.data().infinite_geometry(),
+			geometry: positioner_geometry,
 			z_order: 1,
 			input_regions: vec![Rect {
 				origin: Vector2::from([0.0; 2]),

@@ -20,13 +20,17 @@ pub struct Popup {
 	id: ObjectId,
 }
 impl Popup {
-	pub fn new(version: u32, surface: Arc<Surface>, positioner: &Positioner, id: ObjectId) -> Self {
+	pub fn new(
+		version: u32,
+		surface: Arc<Surface>,
+		positioner_data: PositionerData,
+		id: ObjectId,
+	) -> Self {
 		let _ = surface
 			.wl_surface
 			.surface_id
 			.set(SurfaceUpdateTarget::Child { id: random() });
 
-		let positioner_data = positioner.data();
 		Self {
 			version,
 			surface,
@@ -57,8 +61,9 @@ impl XdgPopup for Popup {
 		positioner: ObjectId,
 		token: u32,
 	) -> WaylandResult<()> {
-		let positioner = client.try_get::<Positioner>(positioner)?;
-		let positioner_data = positioner.data();
+		let positioner_data = client
+			.try_get::<Positioner>(positioner)?
+			.complete(self.surface.wm_base)?;
 		*self.positioner_data.lock() = positioner_data;
 		if self.version >= 5 {
 			self.repositioned(client, sender_id, token).await?;

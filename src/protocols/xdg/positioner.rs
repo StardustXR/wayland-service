@@ -1,9 +1,11 @@
-use crate::error::WaylandResult;
+use crate::error::{WaylandError, WaylandResult};
 use mint::Vector2;
 use parking_lot::Mutex;
 use stardust_xr_panels::panel_item::Geometry;
 use waynest::ObjectId;
-use waynest_protocols::server::stable::xdg_shell::xdg_positioner::*;
+use waynest_protocols::server::stable::xdg_shell::{
+	xdg_positioner::*, xdg_wm_base::Error as WmBaseError,
+};
 use waynest_server::Client as _;
 
 #[derive(Debug, Clone, Copy)]
@@ -115,14 +117,25 @@ impl PositionerData {
 		geometry
 	}
 }
-impl Default for PositionerData {
+
+/// what the client has set so far, there's no sensible default for size or anchor rect
+/// so a positioner only becomes usable once both are in
+#[derive(Debug, Clone, Copy)]
+struct UncheckedPositioner {
+	size: Option<Vector2<u32>>,
+	anchor_rect: Option<Geometry>,
+	offset: Vector2<i32>,
+	anchor: Anchor,
+	gravity: Gravity,
+	constraint_adjustment: ConstraintAdjustment,
+	reactive: bool,
+	parent_size: Vector2<u32>,
+}
+impl Default for UncheckedPositioner {
 	fn default() -> Self {
 		Self {
-			size: [0; 2].into(),
-			anchor_rect: Geometry {
-				origin: Vector2::from([0; 2]),
-				size: Vector2::from([0; 2]),
-			},
+			size: None,
+			anchor_rect: None,
 			offset: [0, 0].into(),
 			anchor: Anchor::TopLeft,
 			gravity: Gravity::TopLeft,
@@ -132,24 +145,50 @@ impl Default for PositionerData {
 		}
 	}
 }
+impl UncheckedPositioner {
+	fn check(&self) -> Option<PositionerData> {
+		Some(PositionerData {
+			size: self.size?,
+			anchor_rect: self.anchor_rect?,
+			offset: self.offset,
+			anchor: self.anchor,
+			gravity: self.gravity,
+			constraint_adjustment: self.constraint_adjustment,
+			reactive: self.reactive,
+			parent_size: self.parent_size,
+		})
+	}
+}
 
 #[derive(Debug, waynest_server::RequestDispatcher)]
 #[waynest(error = crate::error::WaylandError, connection = crate::client::Client)]
 pub struct Positioner {
-	data: Mutex<PositionerData>,
+	draft: Mutex<UncheckedPositioner>,
 	id: ObjectId,
 }
 impl Positioner {
 	pub fn new(id: ObjectId) -> Self {
 		Self {
-			data: Mutex::new(PositionerData::default()),
+			draft: Mutex::new(UncheckedPositioner::default()),
 			id,
 		}
 	}
-}
-impl Positioner {
-	pub fn data(&self) -> PositionerData {
-		*self.data.lock()
+
+	// the spec puts invalid_positioner on xdg_wm_base, not on the positioner itself
+	pub fn complete(&self, wm_base: ObjectId) -> WaylandResult<PositionerData> {
+		self.draft.lock().check().ok_or(WaylandError::Fatal {
+			object_id: wm_base,
+			code: WmBaseError::InvalidPositioner as u32,
+			message: "positioner needs both a size and an anchor rect",
+		})
+	}
+
+	fn invalid_input(&self, message: &'static str) -> WaylandError {
+		WaylandError::Fatal {
+			object_id: self.id,
+			code: Error::InvalidInput as u32,
+			message,
+		}
 	}
 }
 impl XdgPositioner for Positioner {
@@ -159,12 +198,13 @@ impl XdgPositioner for Positioner {
 		&self,
 		_client: &mut Self::Connection,
 		_sender_id: ObjectId,
-		_width: i32,
-		_height: i32,
+		width: i32,
+		height: i32,
 	) -> WaylandResult<()> {
-		let mut data = self.data.lock();
-		data.size = [_width.max(0) as u32, _height.max(0) as u32].into();
-		data.reactive = true;
+		if width <= 0 || height <= 0 {
+			return Err(self.invalid_input("positioner size must be positive"));
+		}
+		self.draft.lock().size = Some([width as u32, height as u32].into());
 		Ok(())
 	}
 
@@ -177,12 +217,13 @@ impl XdgPositioner for Positioner {
 		width: i32,
 		height: i32,
 	) -> WaylandResult<()> {
-		let mut data = self.data.lock();
-		data.anchor_rect.origin = Vector2 { x, y };
-		data.anchor_rect.size = Vector2 {
-			x: width.max(0) as u32,
-			y: height.max(0) as u32,
-		};
+		if width < 0 || height < 0 {
+			return Err(self.invalid_input("anchor rect size can't be negative"));
+		}
+		self.draft.lock().anchor_rect = Some(Geometry {
+			origin: [x, y].into(),
+			size: [width as u32, height as u32].into(),
+		});
 		Ok(())
 	}
 
@@ -190,10 +231,9 @@ impl XdgPositioner for Positioner {
 		&self,
 		_client: &mut Self::Connection,
 		_sender_id: ObjectId,
-		_anchor: Anchor,
+		anchor: Anchor,
 	) -> WaylandResult<()> {
-		let mut data = self.data.lock();
-		data.anchor = _anchor;
+		self.draft.lock().anchor = anchor;
 		Ok(())
 	}
 
@@ -203,8 +243,7 @@ impl XdgPositioner for Positioner {
 		_sender_id: ObjectId,
 		gravity: Gravity,
 	) -> WaylandResult<()> {
-		let mut data = self.data.lock();
-		data.gravity = gravity;
+		self.draft.lock().gravity = gravity;
 		Ok(())
 	}
 
@@ -212,10 +251,9 @@ impl XdgPositioner for Positioner {
 		&self,
 		_client: &mut Self::Connection,
 		_sender_id: ObjectId,
-		_constraint_adjustment: ConstraintAdjustment,
+		constraint_adjustment: ConstraintAdjustment,
 	) -> WaylandResult<()> {
-		let mut data = self.data.lock();
-		data.constraint_adjustment = _constraint_adjustment;
+		self.draft.lock().constraint_adjustment = constraint_adjustment;
 		Ok(())
 	}
 
@@ -223,10 +261,10 @@ impl XdgPositioner for Positioner {
 		&self,
 		_client: &mut Self::Connection,
 		_sender_id: ObjectId,
-		_x: i32,
-		_y: i32,
+		x: i32,
+		y: i32,
 	) -> WaylandResult<()> {
-		self.data.lock().offset = [_x, _y].into();
+		self.draft.lock().offset = [x, y].into();
 		Ok(())
 	}
 
@@ -235,6 +273,7 @@ impl XdgPositioner for Positioner {
 		_client: &mut Self::Connection,
 		_sender_id: ObjectId,
 	) -> WaylandResult<()> {
+		self.draft.lock().reactive = true;
 		Ok(())
 	}
 
@@ -242,12 +281,11 @@ impl XdgPositioner for Positioner {
 		&self,
 		_client: &mut Self::Connection,
 		_sender_id: ObjectId,
-		_parent_width: i32,
-		_parent_height: i32,
+		parent_width: i32,
+		parent_height: i32,
 	) -> WaylandResult<()> {
-		let mut data = self.data.lock();
-		data.parent_size.x = _parent_width.max(0) as u32;
-		data.parent_size.y = _parent_height.max(0) as u32;
+		self.draft.lock().parent_size =
+			[parent_width.max(0) as u32, parent_height.max(0) as u32].into();
 		Ok(())
 	}
 

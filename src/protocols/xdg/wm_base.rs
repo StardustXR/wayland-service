@@ -61,7 +61,7 @@ impl XdgWmBase for WmBase {
 				});
 			}
 		};
-		let xdg_surface = Surface::new(xdg_surface_id, self.version, wl_surface);
+		let xdg_surface = Surface::new(xdg_surface_id, self.version, self.id, wl_surface);
 		client.insert(xdg_surface_id, xdg_surface)?;
 
 		Ok(())
