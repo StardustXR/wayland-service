@@ -2,7 +2,7 @@ use crate::{
 	client::{Client, Message, MessageSink},
 	error::WaylandResult,
 };
-use parking_lot::Mutex;
+use parking_lot::{Mutex, MutexGuard};
 use std::{
 	os::fd::{AsFd, OwnedFd},
 	ptr,
@@ -53,18 +53,16 @@ pub fn register_client(sink: MessageSink) {
 
 pub fn unregister_client(sink: &MessageSink) {
 	CLIENTS.lock().retain(|s| !s.same_channel(sink));
-	let cleared = CLIPBOARD
-		.lock()
-		.take_if(|s| s.owner.same_channel(sink))
-		.is_some();
-	if cleared {
-		broadcast_selection(None);
+	let mut clipboard = CLIPBOARD.lock();
+	if clipboard.take_if(|s| s.owner.same_channel(sink)).is_some() {
+		broadcast_selection(&clipboard);
 	}
 }
 
-fn broadcast_selection(selection: Option<ClipboardSelection>) {
+// takes the guard so every client sees selections in the order CLIPBOARD changed
+fn broadcast_selection(clipboard: &MutexGuard<'_, Option<ClipboardSelection>>) {
 	for sink in CLIENTS.lock().iter() {
-		let _ = sink.send(Message::ClipboardSelection(selection.clone()));
+		let _ = sink.send(Message::ClipboardSelection((**clipboard).clone()));
 	}
 }
 
@@ -135,12 +133,12 @@ impl WlDataSource for DataSource {
 		client: &mut Self::Connection,
 		_sender_id: ObjectId,
 	) -> WaylandResult<()> {
-		let cleared = CLIPBOARD
-			.lock()
+		let mut clipboard = CLIPBOARD.lock();
+		if clipboard
 			.take_if(|s| ptr::eq(Arc::as_ptr(&s.source), self))
-			.is_some();
-		if cleared {
-			broadcast_selection(None);
+			.is_some()
+		{
+			broadcast_selection(&clipboard);
 		}
 		client.remove(self.id);
 		Ok(())
@@ -185,10 +183,10 @@ impl WlDataDevice for DataDevice {
 		_serial: u32,
 	) -> WaylandResult<()> {
 		let Some(source_id) = source else {
-			let old = CLIPBOARD.lock().take();
-			if let Some(old) = old {
+			let mut clipboard = CLIPBOARD.lock();
+			if let Some(old) = clipboard.take() {
 				old.cancel();
-				broadcast_selection(None);
+				broadcast_selection(&clipboard);
 			}
 			return Ok(());
 		};
@@ -200,13 +198,13 @@ impl WlDataDevice for DataDevice {
 			owner: client.message_sink()?,
 		};
 
-		let old = CLIPBOARD.lock().replace(selection.clone());
-		if let Some(old) = old
+		let mut clipboard = CLIPBOARD.lock();
+		if let Some(old) = clipboard.replace(selection.clone())
 			&& !Arc::ptr_eq(&old.source, &selection.source)
 		{
 			old.cancel();
 		}
-		broadcast_selection(Some(selection));
+		broadcast_selection(&clipboard);
 
 		Ok(())
 	}
