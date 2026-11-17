@@ -137,7 +137,7 @@ impl ItemHandlerQuery {
 		let Some(obj) = XdgBackend::connect(acceptor, &seat, &toplevel).await else {
 			return;
 		};
-		toplevel.switch_panel_shell(obj).await;
+		toplevel.switch_panel_shell(None, obj).await;
 		self.replaced.store(true, Ordering::Relaxed);
 	}
 }

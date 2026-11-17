@@ -109,17 +109,13 @@ impl XdgBackend {
 			_ = obj.panel_shell.set(shell);
 			_ = obj.output_spatial.set(spatial_ref.clone());
 			tokio::spawn({
-				// A strong share, not a `Weak`: `death_notification` borrows the node
-				// across the await, so there has to be an owner here. That makes this
-				// task a second owner of the backend for as long as the acceptor holds
-				// it, which the `Toplevel` used to be the only one of — hence the
-				// handles below rather than `obj.toplevel()`, whose `expect` assumes
-				// exactly the ownership this breaks.
-				let obj = obj.clone();
+				// weak, the acceptor only lets go once the backend dies, so owning it
+				// here would keep a closed window's panel item around forever
 				let seat = obj.seat.clone();
 				let toplevel = obj.toplevel.clone();
 				let output_spatial = spatial_ref;
 				let death_future = obj.death_notifier();
+				let obj = Arc::downgrade(&obj);
 				async move {
 					death_future.wait().await;
 					let Some(seat) = seat.upgrade() else {
@@ -133,7 +129,7 @@ impl XdgBackend {
 						return;
 					};
 					match PanelItemUi::create(output_spatial, &seat, &toplevel).await {
-						Ok(shell) => toplevel.switch_panel_shell(shell).await,
+						Ok(shell) => toplevel.switch_panel_shell(Some(&obj), shell).await,
 						Err(e) => tracing::error!("failed to recreate panel item ui: {e:#}"),
 					}
 				}

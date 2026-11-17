@@ -11,11 +11,14 @@ use crate::{
 	util::get_env,
 };
 
-use super::{popup::Popup, positioner::Positioner, toplevel::MappedInner};
+use super::{backend::XdgBackend, popup::Popup, positioner::Positioner, toplevel::Commit};
+use crate::protocols::core::seat::Seat;
+use gluon_ipc::Node;
 use mint::Vector2;
+use parking_lot::Mutex;
 use stardust_xr_fusion::spatial::{Spatial, SpatialExt as _, Transform};
 use stardust_xr_panels::panel_item::{ChildState, Rect, SurfaceId, SurfaceUpdateTarget};
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use waynest::ObjectId;
 pub use waynest_protocols::server::stable::xdg_shell::xdg_surface::*;
 use waynest_protocols::server::stable::xdg_shell::{
@@ -31,6 +34,7 @@ pub struct Surface {
 	pub wm_base: ObjectId,
 	pub wl_surface: Arc<crate::protocols::core::surface::Surface>,
 	configured: Arc<std::sync::atomic::AtomicBool>,
+	toplevel: Mutex<Weak<Toplevel>>,
 }
 impl Surface {
 	pub fn new(
@@ -45,6 +49,7 @@ impl Surface {
 			wm_base,
 			wl_surface,
 			configured: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+			toplevel: Mutex::new(Weak::new()),
 		}
 	}
 
@@ -67,6 +72,55 @@ impl Surface {
 		let serial = client.next_event_serial();
 		self.configure(client, self.id, serial).await
 	}
+}
+
+async fn map_toplevel(
+	toplevel: Arc<Toplevel>,
+	generation: u64,
+	seat: Weak<Seat>,
+	pid: Option<i32>,
+) {
+	let panel_item = create_panel_item(&toplevel, seat, pid).await;
+	if toplevel.finish_mapping(generation, panel_item).is_ok() {
+		toplevel
+			.wl_surface()
+			.apply_buffered_surface_update_recursive();
+	}
+}
+
+async fn create_panel_item(
+	toplevel: &Arc<Toplevel>,
+	seat: Weak<Seat>,
+	pid: Option<i32>,
+) -> Option<Arc<Node<XdgBackend>>> {
+	let Some(seat) = seat.upgrade() else {
+		tracing::warn!("no seat available, cannot map toplevel");
+		return None;
+	};
+	let client = CLIENT.wait();
+	let spatial_token = pid
+		.and_then(|pid| get_env(pid).ok())
+		.and_then(|mut v| v.remove("STARDUST_STARTUP_TOKEN"));
+	if let Some(panel_item) = spawn_default_panel_shell(&spatial_token, toplevel, &seat).await {
+		return Some(panel_item);
+	}
+	let spatial_ref = if let Some(token) = spatial_token
+		&& let Some(spatial_ref) = client.startup_token_spatial(token).await
+	{
+		spatial_ref
+	} else {
+		match Spatial::new(client, client.root(), Transform::IDENTITY).await {
+			Ok((_, spatial_ref)) => spatial_ref,
+			Err(e) => {
+				tracing::error!("failed to create spatial for toplevel: {e}");
+				return None;
+			}
+		}
+	};
+	PanelItemUi::create(spatial_ref, &seat, toplevel)
+		.await
+		.inspect_err(|e| tracing::error!("failed to create panel item ui for toplevel: {e:#}"))
+		.ok()
 }
 
 impl XdgSurface for Surface {
@@ -111,83 +165,25 @@ impl XdgSurface for Surface {
 		let display = client.display()?;
 		let seat = display.seat.get().map(Arc::downgrade).unwrap_or_default();
 		let pid = display.pid;
-		let configured = self.configured.clone();
-		let mut first_commit = true;
 		let message_tx = client.message_sink()?.clone();
 		*self.wl_surface.toplevel.write() = toplevel_weak.clone();
+		*self.toplevel.lock() = toplevel_weak.clone();
 		self.wl_surface.add_commit_handler(move |surface| {
 			let Some(toplevel) = toplevel_weak.upgrade() else {
 				return false;
 			};
-
-			if first_commit {
-				let _ = message_tx.send(Message::ReconfigureToplevel(toplevel.clone()));
-				first_commit = false;
-			}
-
-			let mapped_lock = toplevel.mapped.lock();
-			if mapped_lock.is_none()
-				&& configured.load(std::sync::atomic::Ordering::Relaxed)
-				&& surface.currently_has_valid_buffer()
-			{
-				drop(mapped_lock);
-				let client = CLIENT.wait();
-				let seat = seat.clone();
-				let toplevel = toplevel.clone();
-				let spatial_token = pid
-					.and_then(|pid| get_env(pid).ok())
-					.and_then(|mut v| v.remove("STARDUST_STARTUP_TOKEN"));
-				tokio::spawn(async move {
-					let Some(seat) = seat.upgrade() else {
-						tracing::warn!("no seat available, cannot map toplevel");
-						return;
-					};
-					let default_panel_shell_item =
-						spawn_default_panel_shell(&spatial_token, &toplevel, &seat).await;
-					let panel_item = if let Some(i) = default_panel_shell_item {
-						i
-					} else {
-						let spatial_ref = if let Some(token) = spatial_token
-							&& let Some(spatial_ref) = client.startup_token_spatial(token).await
-						{
-							spatial_ref
-						} else {
-							match Spatial::new(client, client.root(), Transform::IDENTITY).await {
-								Ok((_, spatial_ref)) => spatial_ref,
-								Err(e) => {
-									tracing::error!("failed to create spatial for toplevel: {e}");
-									return;
-								}
-							}
-						};
-
-						match PanelItemUi::create(spatial_ref, &seat, &toplevel).await {
-							Ok(panel_item) => panel_item,
-							Err(e) => {
-								tracing::error!(
-									"failed to create panel item ui for toplevel: {e:#}"
-								);
-								return;
-							}
-						}
-					};
-					let mut mapped_lock = toplevel.mapped.lock();
-					// *surface.panel_item.lock() = Arc::downgrade(&mapped_inner.panel_item);
-					mapped_lock.replace(MappedInner { panel_item });
-					drop(mapped_lock);
-					toplevel
-						.wl_surface()
-						.apply_buffered_surface_update_recursive();
-				});
-				return false;
-			}
-			drop(mapped_lock);
-			if let Some(panel_item) = toplevel.panel_item() {
-				let size_lock = toplevel.last_committed_res.lock();
-				if let Some(size) = surface.current_size()
-					&& size_lock.is_none_or(|v| v != size)
-				{
-					if let Some(shell) = panel_item.panel_shell() {
+			match toplevel.commit(surface.currently_has_valid_buffer(), surface.current_size()) {
+				Commit::Nothing => {}
+				Commit::Configure => {
+					let _ = message_tx.send(Message::ReconfigureToplevel(toplevel));
+				}
+				Commit::Map { generation } => {
+					tokio::spawn(map_toplevel(toplevel, generation, seat.clone(), pid));
+				}
+				Commit::Resized(size) => {
+					if let Some(panel_item) = toplevel.panel_item()
+						&& let Some(shell) = panel_item.panel_shell()
+					{
 						_ = shell.toplevel_resized(Vector2 {
 							x: size.x as u32,
 							y: size.y as u32,
@@ -329,6 +325,9 @@ impl XdgSurface for Surface {
 	) -> WaylandResult<()> {
 		self.configured
 			.store(true, std::sync::atomic::Ordering::SeqCst);
+		if let Some(toplevel) = self.toplevel.lock().upgrade() {
+			toplevel.acked();
+		}
 		Ok(())
 	}
 }

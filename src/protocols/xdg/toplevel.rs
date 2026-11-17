@@ -5,14 +5,38 @@ use gluon_ipc::Node;
 use mint::Vector2;
 use parking_lot::Mutex;
 use stardust_xr_panels::panel_item::SurfaceUpdateTarget;
-use std::sync::Arc;
+use std::sync::{
+	Arc, Weak,
+	atomic::{AtomicU64, Ordering},
+};
 use waynest::ObjectId;
 pub use waynest_protocols::server::stable::xdg_shell::xdg_toplevel::*;
 use waynest_server::Client as _;
 
+/// the xdg_surface dance a toplevel does before stardust ever sees it,
+/// and does again every time the client unmaps it with a null buffer
 #[derive(Debug)]
-pub struct MappedInner {
-	pub panel_item: Arc<Node<XdgBackend>>,
+enum Lifecycle {
+	/// no configure may be sent until the client's first commit
+	AwaitingInitialCommit,
+	AwaitingAck,
+	Configured,
+	/// a panel item is being made, a stale generation means the client unmapped meanwhile
+	Mapping {
+		generation: u64,
+	},
+	Mapped {
+		panel_item: Arc<Node<XdgBackend>>,
+		size: Option<Vector2<usize>>,
+	},
+}
+
+/// what a commit asks the surface's commit handler to go do
+pub enum Commit {
+	Nothing,
+	Configure,
+	Map { generation: u64 },
+	Resized(Vector2<usize>),
 }
 
 #[derive(Debug, Clone)]
@@ -42,8 +66,8 @@ impl Default for ToplevelData {
 pub struct Toplevel {
 	pub id: ObjectId,
 	xdg_surface: Arc<super::surface::Surface>,
-	pub mapped: Mutex<Option<MappedInner>>,
-	pub(super) last_committed_res: Mutex<Option<Vector2<usize>>>,
+	lifecycle: Mutex<Lifecycle>,
+	mappings: AtomicU64,
 	data: Mutex<ToplevelData>,
 }
 impl Toplevel {
@@ -57,21 +81,101 @@ impl Toplevel {
 		Toplevel {
 			id: object_id,
 			xdg_surface,
-			mapped: Mutex::new(None),
+			lifecycle: Mutex::new(Lifecycle::AwaitingInitialCommit),
+			mappings: AtomicU64::new(0),
 			data: Mutex::new(ToplevelData::default()),
-			last_committed_res: Mutex::new(None),
 		}
 	}
-	pub async fn switch_panel_shell(&self, new_item: Arc<Node<XdgBackend>>) {
-		if let Some(mapped) = self.mapped.lock().as_mut() {
-			// TODO: modify release target point so we can send an actual update
-			// without the client having to make a new commit
-			mapped.panel_item = new_item;
+
+	pub fn commit(&self, has_buffer: bool, size: Option<Vector2<usize>>) -> Commit {
+		let mut lifecycle = self.lifecycle.lock();
+		match &mut *lifecycle {
+			Lifecycle::AwaitingInitialCommit => {
+				*lifecycle = Lifecycle::AwaitingAck;
+				Commit::Configure
+			}
+			Lifecycle::Configured if has_buffer => {
+				let generation = self.mappings.fetch_add(1, Ordering::Relaxed);
+				*lifecycle = Lifecycle::Mapping { generation };
+				Commit::Map { generation }
+			}
+			Lifecycle::Mapping { .. } | Lifecycle::Mapped { .. } if !has_buffer => {
+				let unmapped = std::mem::replace(&mut *lifecycle, Lifecycle::AwaitingInitialCommit);
+				drop(lifecycle);
+				drop(unmapped);
+				Commit::Nothing
+			}
+			Lifecycle::Mapped {
+				size: last_size, ..
+			} => match size {
+				Some(s) if size != *last_size => {
+					*last_size = size;
+					Commit::Resized(s)
+				}
+				_ => Commit::Nothing,
+			},
+			_ => Commit::Nothing,
 		}
+	}
+	pub fn acked(&self) {
+		let mut lifecycle = self.lifecycle.lock();
+		if matches!(*lifecycle, Lifecycle::AwaitingAck) {
+			*lifecycle = Lifecycle::Configured;
+		}
+	}
+	/// hands the panel item back if this mapping went stale, so the caller drops it outside the lock
+	pub fn finish_mapping(
+		&self,
+		generation: u64,
+		panel_item: Option<Arc<Node<XdgBackend>>>,
+	) -> Result<(), Option<Arc<Node<XdgBackend>>>> {
+		let size = self.wl_surface().current_size();
+		let mut lifecycle = self.lifecycle.lock();
+		if !matches!(*lifecycle, Lifecycle::Mapping { generation: g } if g == generation) {
+			return Err(panel_item);
+		}
+		*lifecycle = match panel_item {
+			Some(panel_item) => Lifecycle::Mapped { panel_item, size },
+			None => Lifecycle::Configured,
+		};
+		Ok(())
+	}
+	fn unmap(&self) {
+		let unmapped = std::mem::replace(
+			&mut *self.lifecycle.lock(),
+			Lifecycle::AwaitingInitialCommit,
+		);
+		drop(unmapped);
+	}
+
+	/// with `replacing`, only swaps if that's still the current panel item,
+	/// a late death notice must not clobber a toplevel that was remapped since
+	pub async fn switch_panel_shell(
+		&self,
+		replacing: Option<&Weak<Node<XdgBackend>>>,
+		new_item: Arc<Node<XdgBackend>>,
+	) {
+		let old = match &mut *self.lifecycle.lock() {
+			Lifecycle::Mapped { panel_item, .. }
+				if replacing.is_none_or(|r| r.as_ptr() == Arc::as_ptr(panel_item)) =>
+			{
+				// TODO: modify release target point so we can send an actual update
+				// without the client having to make a new commit
+				std::mem::replace(panel_item, new_item)
+			}
+			_ => return,
+		};
+		drop(old);
 		self.wl_surface().reapply_buffer_recursive();
 	}
 	pub fn panel_item(&self) -> Option<Arc<Node<XdgBackend>>> {
-		self.mapped.lock().as_ref().map(|v| v.panel_item.clone())
+		match &*self.lifecycle.lock() {
+			Lifecycle::Mapped { panel_item, .. } => Some(panel_item.clone()),
+			_ => None,
+		}
+	}
+	pub fn is_mapped(&self) -> bool {
+		matches!(*self.lifecycle.lock(), Lifecycle::Mapped { .. })
 	}
 
 	pub fn wl_surface(&self) -> &Arc<Surface> {
@@ -114,6 +218,9 @@ impl Toplevel {
 	}
 
 	pub async fn reconfigure(&self, client: &mut Client) -> WaylandResult<()> {
+		if matches!(*self.lifecycle.lock(), Lifecycle::AwaitingInitialCommit) {
+			return Ok(());
+		}
 		let data = self.data.lock().clone();
 
 		// Use the explicitly set size, applying constraints
@@ -162,13 +269,13 @@ impl XdgToplevel for Toplevel {
 		if let Some(parent) = parent {
 			// Per spec: parent must be another xdg_toplevel surface
 			if let Some(parent_toplevel) = client.get::<Toplevel>(parent) {
-				let Some(_mapped) = &*parent_toplevel.mapped.lock() else {
+				if !parent_toplevel.is_mapped() {
 					// Per spec: parent surfaces must be mapped before being used as a parent
 					// Setting an unmapped window as parent should raise a protocol error
 					// For now we just unset the parent as a fallback
 					self.data.lock().parent.take();
 					return Ok(());
-				};
+				}
 
 				// Per spec: store parent to ensure this surface is stacked above parent
 				// and other ancestor surfaces. Used for proper window stacking order.
@@ -310,7 +417,7 @@ impl XdgToplevel for Toplevel {
 
 	async fn set_fullscreen(
 		&self,
-		_client: &mut Self::Connection,
+		client: &mut Self::Connection,
 		_sender_id: ObjectId,
 		_output: Option<ObjectId>,
 	) -> WaylandResult<()> {
@@ -320,12 +427,12 @@ impl XdgToplevel for Toplevel {
 				_ = shell.toplevel_fullscreen(true);
 			}
 		}
-		Ok(())
+		self.reconfigure(client).await
 	}
 
 	async fn unset_fullscreen(
 		&self,
-		_client: &mut Self::Connection,
+		client: &mut Self::Connection,
 		_sender_id: ObjectId,
 	) -> WaylandResult<()> {
 		self.data.lock().fullscreen = false;
@@ -334,7 +441,7 @@ impl XdgToplevel for Toplevel {
 				_ = shell.toplevel_fullscreen(false);
 			}
 		}
-		Ok(())
+		self.reconfigure(client).await
 	}
 
 	async fn set_minimized(
@@ -351,13 +458,13 @@ impl XdgToplevel for Toplevel {
 		_sender_id: ObjectId,
 	) -> WaylandResult<()> {
 		client.remove(self.id);
-		self.mapped.lock().take();
+		self.unmap();
 		self.wl_surface().retire_role();
 		Ok(())
 	}
 }
 impl Drop for Toplevel {
 	fn drop(&mut self) {
-		self.mapped.lock().take();
+		self.unmap();
 	}
 }
