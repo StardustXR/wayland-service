@@ -48,9 +48,8 @@ pub enum Message {
 		refresh_cycle: u64,
 	},
 	// TODO: this whole clipboard implementation is the bare minimum to get copy/paste
-	// working across clients. It's missing: cancelling the previous selection's
-	// wl_data_source (the `cancelled` event), drag-and-drop (wl_data_device.start_drag
-	// is still a no-op), and any kind of `dnd_action`/`finish` negotiation. See
+	// working across clients. It's missing drag-and-drop (wl_data_device.start_drag is
+	// still a no-op) and any kind of `dnd_action`/`finish` negotiation. See
 	// protocols/core/data_device.rs.
 	ClipboardSelection(Option<ClipboardSelection>),
 	ClipboardSend {
@@ -58,6 +57,7 @@ pub enum Message {
 		mime_type: String,
 		fd: OwnedFd,
 	},
+	ClipboardCancel(Arc<DataSource>),
 }
 
 pin_project! {

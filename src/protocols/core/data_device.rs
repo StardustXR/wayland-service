@@ -19,8 +19,6 @@ use waynest_server::Client as _;
 // another to read it. Known gaps, in rough order of how much they'll bite:
 // - Drag-and-drop is entirely unimplemented (start_drag, actions/action, enter/motion/
 //   drop/leave are all no-ops or unused).
-// - The previous wl_data_source never gets its `cancelled` event when a new selection
-//   replaces it, so old clients think they still own the clipboard.
 // - Only one global clipboard selection is tracked (no per-seat scoping), and only one
 //   wl_data_device per client is supported (mirrors the existing single-seat/output
 //   assumption elsewhere in this codebase), the most recently created one wins.
@@ -41,6 +39,11 @@ pub struct ClipboardSelection {
 	source: Arc<DataSource>,
 	mime_types: Vec<String>,
 	owner: MessageSink,
+}
+impl ClipboardSelection {
+	fn cancel(self) {
+		let _ = self.owner.send(Message::ClipboardCancel(self.source));
+	}
 }
 /// The current clipboard contents, set by the last client to call set_selection.
 static CLIPBOARD: Mutex<Option<ClipboardSelection>> = Mutex::new(None);
@@ -184,7 +187,10 @@ impl WlDataDevice for DataDevice {
 	) -> WaylandResult<()> {
 		let Some(source_id) = source else {
 			// TODO: doesn't notify anyone that the selection was cleared.
-			*CLIPBOARD.lock() = None;
+			let old = CLIPBOARD.lock().take();
+			if let Some(old) = old {
+				old.cancel();
+			}
 			return Ok(());
 		};
 		let source = client.try_get::<DataSource>(source_id)?;
@@ -195,7 +201,12 @@ impl WlDataDevice for DataDevice {
 			owner: client.message_sink()?,
 		};
 
-		*CLIPBOARD.lock() = Some(selection.clone());
+		let old = CLIPBOARD.lock().replace(selection.clone());
+		if let Some(old) = old
+			&& !Arc::ptr_eq(&old.source, &selection.source)
+		{
+			old.cancel();
+		}
 		broadcast_selection(Some(selection));
 
 		Ok(())
@@ -248,8 +259,15 @@ async fn offer_selection(
 	Ok(())
 }
 
-/// Handles `Message::ClipboardSelection`/`Message::ClipboardSend`, dispatched from
-/// socket.rs's per-client message loop.
+// the owner may have destroyed the source since the message was queued
+fn source_alive(client: &Client, source: &Arc<DataSource>) -> bool {
+	client
+		.get::<DataSource>(source.id)
+		.is_some_and(|s| Arc::ptr_eq(&s, source))
+}
+
+/// Handles the `Message::Clipboard*` variants, dispatched from socket.rs's per-client
+/// message loop.
 pub async fn handle_message(client: &mut Client, message: Message) -> WaylandResult<()> {
 	match message {
 		Message::ClipboardSelection(selection) => {
@@ -263,14 +281,15 @@ pub async fn handle_message(client: &mut Client, message: Message) -> WaylandRes
 			mime_type,
 			fd,
 		} => {
-			// the owner may have destroyed the source since the receive was queued
-			if client
-				.get::<DataSource>(source.id)
-				.is_some_and(|s| Arc::ptr_eq(&s, &source))
-			{
+			if source_alive(client, &source) {
 				source
 					.send(client, source.id, mime_type, fd.as_fd())
 					.await?;
+			}
+		}
+		Message::ClipboardCancel(source) => {
+			if source_alive(client, &source) {
+				source.cancelled(client, source.id).await?;
 			}
 		}
 		_ => tracing::error!("non-clipboard message sent to the clipboard handler"),

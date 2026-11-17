@@ -233,7 +233,9 @@ impl WaylandClient {
 					.send_presentation_feedback(client, display_timestamp, refresh_cycle)
 					.await?;
 			}
-			msg @ (Message::ClipboardSelection { .. } | Message::ClipboardSend { .. }) => {
+			msg @ (Message::ClipboardSelection(_)
+			| Message::ClipboardSend { .. }
+			| Message::ClipboardCancel(_)) => {
 				crate::protocols::core::data_device::handle_message(client, msg).await?;
 			}
 		}
