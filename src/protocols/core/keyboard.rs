@@ -19,26 +19,26 @@ enum KeyboardState {
 	/// no keymap sent yet, the client can't make sense of anything else until then
 	Fresh,
 	Unfocused {
-		keymap: u64,
+		keymap_id: u64,
 	},
 	/// pressed is exactly what the client believes is held down
 	Focused {
-		keymap: u64,
+		keymap_id: u64,
 		surface: Weak<Surface>,
 		pressed: Vec<u32>,
 	},
 }
 impl KeyboardState {
-	fn keymap(&self) -> Option<u64> {
+	fn keymap_id(&self) -> Option<u64> {
 		match self {
 			Self::Fresh => None,
-			Self::Unfocused { keymap } | Self::Focused { keymap, .. } => Some(*keymap),
+			Self::Unfocused { keymap_id } | Self::Focused { keymap_id, .. } => Some(*keymap_id),
 		}
 	}
-	fn set_keymap(&mut self, id: u64) {
+	fn set_keymap_id(&mut self, id: u64) {
 		match self {
-			Self::Fresh => *self = Self::Unfocused { keymap: id },
-			Self::Unfocused { keymap } | Self::Focused { keymap, .. } => *keymap = id,
+			Self::Fresh => *self = Self::Unfocused { keymap_id: id },
+			Self::Unfocused { keymap_id } | Self::Focused { keymap_id, .. } => *keymap_id = id,
 		}
 	}
 	fn is_focused_on(&self, surface: &Arc<Surface>) -> bool {
@@ -47,10 +47,12 @@ impl KeyboardState {
 	/// the client already forgot about everything on a surface it destroyed, so no leave
 	fn drop_dead_focus(&mut self, client: &Client) {
 		if let Self::Focused {
-			keymap, surface, ..
+			keymap_id, surface, ..
 		} = self && alive(client, surface).is_none()
 		{
-			*self = Self::Unfocused { keymap: *keymap };
+			*self = Self::Unfocused {
+				keymap_id: *keymap_id,
+			};
 		}
 	}
 }
@@ -95,13 +97,13 @@ impl Keyboard {
 			return Ok(());
 		};
 		let mut state = self.state.lock().await;
-		if state.keymap() != Some(keymap_id) {
+		if state.keymap_id() != Some(keymap_id) {
 			let Ok(Some(fd)) = KEYMAP_STORE.wait().get(keymap).await else {
 				return Ok(());
 			};
 			self.keymap(client, self.id, KeymapFormat::XkbV1, fd.fd.as_fd(), fd.size)
 				.await?;
-			state.set_keymap(keymap_id);
+			state.set_keymap_id(keymap_id);
 		}
 		state.drop_dead_focus(client);
 
@@ -145,7 +147,7 @@ impl Keyboard {
 			.await?;
 
 			*state = KeyboardState::Focused {
-				keymap: keymap_id,
+				keymap_id,
 				surface: Arc::downgrade(&surface),
 				pressed: carried,
 			};
