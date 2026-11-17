@@ -4,7 +4,7 @@ use pin_project_lite::pin_project;
 use stardust_xr_fusion::types::Size2;
 use tokio::{net::UnixStream, sync::mpsc};
 use tokio_stream::Stream;
-use waynest::{Connection, ProtocolError, Socket};
+use waynest::{Connection, ObjectId, ProtocolError, Socket};
 use waynest_server::{Store, StoreError};
 
 use crate::{
@@ -124,6 +124,13 @@ impl Client {
 			connection: Socket::new(unix_stream.into_std()?)?,
 			next_event_serial: 0,
 		})
+	}
+	/// ids get reused once deleted, so an object we kept an Arc to might not be what the client
+	/// knows by that id anymore
+	pub fn holds<T: waynest_server::RequestDispatcher>(&self, id: ObjectId, obj: &T) -> bool {
+		use waynest_server::Client as _;
+		self.get::<T>(id)
+			.is_some_and(|o| std::ptr::eq(Arc::as_ptr(&o), obj))
 	}
 	pub fn next_event_serial(&mut self) -> u32 {
 		let prev = self.next_event_serial;

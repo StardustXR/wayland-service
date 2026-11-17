@@ -100,7 +100,7 @@ impl Seat {
 				position,
 				delta,
 			} => {
-				if let Some(pointer) = self.pointer.get() {
+				if let Some(pointer) = self.live_pointer(client) {
 					if let Some(delta) = delta {
 						pointer
 							.handle_relative_pointer_motion(client, delta)
@@ -116,7 +116,7 @@ impl Seat {
 				button,
 				pressed,
 			} => {
-				if let Some(pointer) = self.pointer.get() {
+				if let Some(pointer) = self.live_pointer(client) {
 					pointer
 						.handle_pointer_button(client, surface, button, pressed)
 						.await?;
@@ -127,7 +127,7 @@ impl Seat {
 				delta,
 				source,
 			} => {
-				if let Some(pointer) = self.pointer.get() {
+				if let Some(pointer) = self.live_pointer(client) {
 					pointer
 						.handle_pointer_scroll_discrete(client, surface, delta, source)
 						.await?;
@@ -138,14 +138,14 @@ impl Seat {
 				delta,
 				source,
 			} => {
-				if let Some(pointer) = self.pointer.get() {
+				if let Some(pointer) = self.live_pointer(client) {
 					pointer
 						.handle_pointer_scroll_pixels(client, surface, delta, source)
 						.await?;
 				}
 			}
 			SeatMessage::PointerScrollStop { surface } => {
-				if let Some(pointer) = self.pointer.get() {
+				if let Some(pointer) = self.live_pointer(client) {
 					pointer.handle_pointer_scroll_stop(client, surface).await?;
 				}
 			}
@@ -156,7 +156,7 @@ impl Seat {
 				pressed,
 				modifier_state,
 			} => {
-				if let Some(keyboard) = self.keyboard.get() {
+				if let Some(keyboard) = self.live_keyboard(client) {
 					keyboard
 						.handle_keyboard_key(client, surface, keymap, key, pressed, modifier_state)
 						.await?;
@@ -167,35 +167,45 @@ impl Seat {
 				id,
 				position,
 			} => {
-				if let Some(touch) = self.touch.get() {
+				if let Some(touch) = self.live_touch(client) {
 					touch
 						.handle_touch_down(client, surface, id, position)
 						.await?;
 				}
 			}
 			SeatMessage::TouchMove { id, position } => {
-				if let Some(touch) = self.touch.get() {
+				if let Some(touch) = self.live_touch(client) {
 					touch.handle_touch_move(client, id, position).await?;
 				}
 			}
 			SeatMessage::TouchUp { id } => {
-				if let Some(touch) = self.touch.get() {
+				if let Some(touch) = self.live_touch(client) {
 					touch.handle_touch_up(client, id).await?;
 				}
 			}
 			SeatMessage::Reset => {
-				if let Some(pointer) = self.pointer.get() {
+				if let Some(pointer) = self.live_pointer(client) {
 					pointer.reset(client).await?;
 				}
-				if let Some(keyboard) = self.keyboard.get() {
+				if let Some(keyboard) = self.live_keyboard(client) {
 					keyboard.reset(client).await?;
 				}
-				if let Some(touch) = self.touch.get() {
+				if let Some(touch) = self.live_touch(client) {
 					touch.reset(client).await?;
 				}
 			}
 		}
 		Ok(())
+	}
+
+	fn live_pointer(&self, client: &Client) -> Option<&Arc<Pointer>> {
+		self.pointer.get().filter(|p| client.holds(p.id, &***p))
+	}
+	fn live_keyboard(&self, client: &Client) -> Option<&Arc<Keyboard>> {
+		self.keyboard.get().filter(|k| client.holds(k.id, &***k))
+	}
+	fn live_touch(&self, client: &Client) -> Option<&Arc<Touch>> {
+		self.touch.get().filter(|t| client.holds(t.0, &***t))
 	}
 
 	pub async fn cursor_surface(&self) -> Option<Arc<Surface>> {

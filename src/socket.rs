@@ -207,10 +207,14 @@ impl WaylandClient {
 				}
 			}
 			Message::ReleaseBuffer(buffer) => {
-				buffer.release(client, buffer.id).await?;
+				if client.holds(buffer.id, &*buffer) {
+					buffer.release(client, buffer.id).await?;
+				}
 			}
 			Message::CloseToplevel(toplevel) => {
-				toplevel.close(client, toplevel.id).await?;
+				if client.holds(toplevel.id, &*toplevel) {
+					toplevel.close(client, toplevel.id).await?;
+				}
 			}
 			Message::ResizeToplevel { toplevel, size } => {
 				toplevel.set_size(size);

@@ -218,7 +218,9 @@ impl Toplevel {
 	}
 
 	pub async fn reconfigure(&self, client: &mut Client) -> WaylandResult<()> {
-		if matches!(*self.lifecycle.lock(), Lifecycle::AwaitingInitialCommit) {
+		if !client.holds(self.id, self)
+			|| matches!(*self.lifecycle.lock(), Lifecycle::AwaitingInitialCommit)
+		{
 			return Ok(());
 		}
 		let data = self.data.lock().clone();

@@ -20,7 +20,9 @@ impl WlCompositor for Compositor {
 	) -> WaylandResult<()> {
 		let surface = Surface::new(client, id)?;
 		client.insert_raw(id, surface.clone())?;
-		if let Some(output) = client.display()?.output.get() {
+		if let Some(output) = client.display()?.output.get().cloned()
+			&& client.holds(output.id, &*output)
+		{
 			surface.enter(client, id, output.id).await?;
 		}
 

@@ -45,13 +45,18 @@ impl Pointer {
 			position.x,
 			position.y
 		);
+		if !client.holds(surface.id, &*surface) {
+			return Ok(());
+		}
 		let mut focused = self.focused_surface.lock().await;
 
 		// If we're entering a new surface
 		if focused.as_ptr() != Arc::as_ptr(&surface) {
 			tracing::debug!("Surface transition detected");
 			// Send leave to old surface if it exists and is still alive
-			if let Some(old_surface) = focused.upgrade() {
+			if let Some(old_surface) = focused.upgrade()
+				&& client.holds(old_surface.id, &*old_surface)
+			{
 				let serial = client.next_event_serial();
 				tracing::debug!("Sending leave event with serial {}", serial);
 				self.leave(client, self.id, serial, old_surface.id).await?;
@@ -308,7 +313,9 @@ impl Pointer {
 
 	pub async fn reset(&self, client: &mut Client) -> WaylandResult<()> {
 		let mut focused = self.focused_surface.lock().await;
-		if let Some(old_surface) = focused.upgrade() {
+		if let Some(old_surface) = focused.upgrade()
+			&& client.holds(old_surface.id, &*old_surface)
+		{
 			let serial = client.next_event_serial();
 			self.leave(client, self.id, serial, old_surface.id).await?;
 			self.frame(client, self.id).await?;

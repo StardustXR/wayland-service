@@ -60,7 +60,7 @@ impl KeyboardState {
 // panel items can keep a surface's Arc around after the client destroyed it
 fn alive(client: &Client, surface: &Weak<Surface>) -> Option<Arc<Surface>> {
 	let s = surface.upgrade()?;
-	client.get::<Surface>(s.id).filter(|c| Arc::ptr_eq(c, &s))
+	client.holds(s.id, &*s).then_some(s)
 }
 
 #[derive(waynest_server::RequestDispatcher)]
@@ -108,6 +108,9 @@ impl Keyboard {
 		state.drop_dead_focus(client);
 
 		if pressed && !state.is_focused_on(&surface) {
+			if !client.holds(surface.id, &*surface) {
+				return Ok(());
+			}
 			let carried = match &mut *state {
 				KeyboardState::Focused {
 					surface: old,

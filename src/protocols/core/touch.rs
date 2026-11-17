@@ -17,6 +17,9 @@ impl Touch {
 		id: u32,
 		position: Vector2<f32>,
 	) -> WaylandResult<()> {
+		if !client.holds(surface.id, &*surface) {
+			return Ok(());
+		}
 		let serial = client.next_event_serial();
 		self.down(
 			client,
