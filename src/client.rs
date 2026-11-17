@@ -11,7 +11,10 @@ use crate::{
 	error::WaylandError,
 	protocols::{
 		core::{
-			buffer::Buffer, callback::Callback, data_device::DataSource, seat::SeatMessage,
+			buffer::Buffer,
+			callback::Callback,
+			data_device::{ClipboardSelection, DataSource},
+			seat::SeatMessage,
 			surface::Surface,
 		},
 		presentation::MonotonicTimestamp,
@@ -49,11 +52,7 @@ pub enum Message {
 	// wl_data_source (the `cancelled` event), removing disconnected clients from the
 	// broadcast list, drag-and-drop (wl_data_device.start_drag is still a no-op), and
 	// any kind of `dnd_action`/`finish` negotiation. See protocols/core/data_device.rs.
-	ClipboardSelection {
-		source: Arc<DataSource>,
-		mime_types: Vec<String>,
-		owner: MessageSink,
-	},
+	ClipboardSelection(Option<ClipboardSelection>),
 	ClipboardSend {
 		source: Arc<DataSource>,
 		mime_type: String,

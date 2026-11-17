@@ -5,6 +5,7 @@ use crate::{
 use parking_lot::Mutex;
 use std::{
 	os::fd::{AsFd, OwnedFd},
+	ptr,
 	sync::Arc,
 };
 use waynest::ObjectId;
@@ -38,7 +39,8 @@ use waynest_server::Client as _;
 /// to every wl_data_device that exists.
 static CLIENTS: Mutex<Vec<MessageSink>> = Mutex::new(Vec::new());
 
-struct ClipboardSelection {
+#[derive(Clone)]
+pub struct ClipboardSelection {
 	source: Arc<DataSource>,
 	mime_types: Vec<String>,
 	owner: MessageSink,
@@ -48,6 +50,12 @@ static CLIPBOARD: Mutex<Option<ClipboardSelection>> = Mutex::new(None);
 
 pub fn register_client(sink: MessageSink) {
 	CLIENTS.lock().push(sink);
+}
+
+fn broadcast_selection(selection: Option<ClipboardSelection>) {
+	for sink in CLIENTS.lock().iter() {
+		let _ = sink.send(Message::ClipboardSelection(selection.clone()));
+	}
 }
 
 #[derive(Debug, waynest_server::RequestDispatcher)]
@@ -84,15 +92,9 @@ impl WlDataDeviceManager for DataDeviceManager {
 
 		// If a clipboard selection already exists, hand this brand-new device an offer
 		// for it immediately, otherwise it'd never find out about the current selection.
-		let existing = CLIPBOARD.lock().as_ref().map(|selection| {
-			(
-				selection.source.clone(),
-				selection.mime_types.clone(),
-				selection.owner.clone(),
-			)
-		});
-		if let Some((source, mime_types, owner)) = existing {
-			offer_selection(client, id, source, mime_types, owner).await?;
+		let selection = CLIPBOARD.lock().clone();
+		if selection.is_some() {
+			offer_selection(client, id, selection).await?;
 		}
 
 		Ok(())
@@ -123,6 +125,13 @@ impl WlDataSource for DataSource {
 		client: &mut Self::Connection,
 		_sender_id: ObjectId,
 	) -> WaylandResult<()> {
+		let cleared = CLIPBOARD
+			.lock()
+			.take_if(|s| ptr::eq(Arc::as_ptr(&s.source), self))
+			.is_some();
+		if cleared {
+			broadcast_selection(None);
+		}
 		client.remove(self.id);
 		Ok(())
 	}
@@ -172,21 +181,14 @@ impl WlDataDevice for DataDevice {
 		};
 		let source = client.try_get::<DataSource>(source_id)?;
 		let mime_types = source.mime_types.lock().clone();
-		let owner = client.message_sink()?;
+		let selection = ClipboardSelection {
+			source,
+			mime_types,
+			owner: client.message_sink()?,
+		};
 
-		*CLIPBOARD.lock() = Some(ClipboardSelection {
-			source: source.clone(),
-			mime_types: mime_types.clone(),
-			owner: owner.clone(),
-		});
-
-		for sink in CLIENTS.lock().iter() {
-			let _ = sink.send(Message::ClipboardSelection {
-				source: source.clone(),
-				mime_types: mime_types.clone(),
-				owner: owner.clone(),
-			});
-		}
+		*CLIPBOARD.lock() = Some(selection.clone());
+		broadcast_selection(Some(selection));
 
 		Ok(())
 	}
@@ -202,18 +204,23 @@ impl WlDataDevice for DataDevice {
 	}
 }
 
-/// Creates a wl_data_offer for `source` on `device_id` and sends the `data_offer`,
-/// `offer` (per mime type) and `selection` events for it, in that order. `owner` is
-/// the message sink of the client that actually owns `source`, stashed on the offer so
-/// `receive()` later knows who to ask for the data.
+/// Creates a wl_data_offer for `selection` on `device_id` and sends the `data_offer`,
+/// `offer` (per mime type) and `selection` events for it, in that order. A `None`
+/// selection just sends a NULL `selection` event.
 async fn offer_selection(
 	client: &mut Client,
 	device_id: ObjectId,
-	source: Arc<DataSource>,
-	mime_types: Vec<String>,
-	owner: MessageSink,
+	selection: Option<ClipboardSelection>,
 ) -> WaylandResult<()> {
 	let device = client.try_get::<DataDevice>(device_id)?;
+	let Some(ClipboardSelection {
+		source,
+		mime_types,
+		owner,
+	}) = selection
+	else {
+		return device.selection(client, device_id, None).await;
+	};
 	let offer_id = client.display()?.next_server_id();
 	let offer = client.insert(
 		offer_id,
@@ -237,14 +244,10 @@ async fn offer_selection(
 /// socket.rs's per-client message loop.
 pub async fn handle_message(client: &mut Client, message: Message) -> WaylandResult<()> {
 	match message {
-		Message::ClipboardSelection {
-			source,
-			mime_types,
-			owner,
-		} => {
+		Message::ClipboardSelection(selection) => {
 			let device_id = *client.display()?.data_device.lock();
 			if let Some(device_id) = device_id {
-				offer_selection(client, device_id, source, mime_types, owner).await?;
+				offer_selection(client, device_id, selection).await?;
 			}
 		}
 		Message::ClipboardSend {
@@ -252,9 +255,15 @@ pub async fn handle_message(client: &mut Client, message: Message) -> WaylandRes
 			mime_type,
 			fd,
 		} => {
-			source
-				.send(client, source.id, mime_type, fd.as_fd())
-				.await?;
+			// the owner may have destroyed the source since the receive was queued
+			if client
+				.get::<DataSource>(source.id)
+				.is_some_and(|s| Arc::ptr_eq(&s, &source))
+			{
+				source
+					.send(client, source.id, mime_type, fd.as_fd())
+					.await?;
+			}
 		}
 		_ => tracing::error!("non-clipboard message sent to the clipboard handler"),
 	}
