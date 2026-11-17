@@ -103,6 +103,11 @@ impl Toplevel {
 				let unmapped = std::mem::replace(&mut *lifecycle, Lifecycle::AwaitingInitialCommit);
 				drop(lifecycle);
 				drop(unmapped);
+				// unmapping puts the toplevel back to how it was right after get_toplevel
+				*self.data.lock() = ToplevelData::default();
+				let mut state = self.wl_surface().state_lock();
+				state.pending.min_size = None;
+				state.pending.max_size = None;
 				Commit::Nothing
 			}
 			Lifecycle::Mapped {
