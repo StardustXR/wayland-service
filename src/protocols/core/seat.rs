@@ -64,7 +64,10 @@ pub enum SeatMessage {
 		surface: Arc<Surface>,
 		focused: bool,
 	},
-	Reset,
+	/// the toplevel's input got a new panel item, so anything held inside it is stale
+	Reset {
+		surface: Arc<Surface>,
+	},
 }
 
 #[derive(Default, waynest_server::RequestDispatcher)]
@@ -204,12 +207,12 @@ impl Seat {
 					}
 				}
 			}
-			SeatMessage::Reset => {
+			SeatMessage::Reset { surface } => {
 				if let Some(pointer) = self.live_pointer(client) {
-					pointer.reset(client).await?;
+					pointer.reset(client, &surface).await?;
 				}
 				if let Some(keyboard) = self.live_keyboard(client) {
-					keyboard.reset(client).await?;
+					keyboard.reset(client, &surface).await?;
 				}
 				if let Some(touch) = self.live_touch(client) {
 					touch.reset(client).await?;

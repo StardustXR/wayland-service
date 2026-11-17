@@ -52,11 +52,7 @@ impl KeyboardState {
 		else {
 			return false;
 		};
-		let Some(focused) = focused.upgrade() else {
-			return false;
-		};
-		let target = surface.toplevel.read().clone();
-		target.strong_count() > 0 && Weak::ptr_eq(&focused.toplevel.read(), &target)
+		focused.upgrade().is_some_and(|f| f.same_toplevel(surface))
 	}
 	/// the client already forgot about everything on a surface it destroyed, so no leave
 	fn drop_dead_focus(&mut self, client: &Client) {
@@ -299,9 +295,16 @@ impl Keyboard {
 		Ok(())
 	}
 
-	pub async fn reset(&self, client: &mut Client) -> WaylandResult<()> {
+	pub async fn reset(
+		&self,
+		client: &mut Client,
+		toplevel_surface: &Surface,
+	) -> WaylandResult<()> {
 		let mut state = self.state.lock().await;
 		state.drop_dead_focus(client);
+		if !state.is_focused_within(toplevel_surface) {
+			return Ok(());
+		}
 		let KeyboardState::Focused { pressed, .. } = &mut *state else {
 			return Ok(());
 		};

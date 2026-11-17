@@ -555,6 +555,8 @@ impl XdgBackend {
 		let _ = toplevel
 			.wl_surface()
 			.message_sink
-			.send(Message::Seat(SeatMessage::Reset));
+			.send(Message::Seat(SeatMessage::Reset {
+				surface: toplevel.wl_surface().clone(),
+			}));
 	}
 }

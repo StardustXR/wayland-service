@@ -311,11 +311,19 @@ impl Pointer {
 		Ok(())
 	}
 
-	pub async fn reset(&self, client: &mut Client) -> WaylandResult<()> {
+	pub async fn reset(
+		&self,
+		client: &mut Client,
+		toplevel_surface: &Surface,
+	) -> WaylandResult<()> {
 		let mut focused = self.focused_surface.lock().await;
-		if let Some(old_surface) = focused.upgrade()
-			&& client.holds(old_surface.id, &*old_surface)
-		{
+		let Some(old_surface) = focused.upgrade() else {
+			return Ok(());
+		};
+		if !old_surface.same_toplevel(toplevel_surface) {
+			return Ok(());
+		}
+		if client.holds(old_surface.id, &*old_surface) {
 			let serial = client.next_event_serial();
 			self.leave(client, self.id, serial, old_surface.id).await?;
 			self.frame(client, self.id).await?;

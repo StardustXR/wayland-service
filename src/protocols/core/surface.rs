@@ -499,6 +499,11 @@ impl Surface {
 	pub fn get_state_buffer_manager(&self) -> Arc<SurfaceCommitAwareBufferManager> {
 		self.state_buffer_manager.clone()
 	}
+	/// popups and subsurfaces count as part of their toplevel
+	pub fn same_toplevel(&self, other: &Surface) -> bool {
+		let target = other.toplevel.read().clone();
+		target.strong_count() > 0 && Weak::ptr_eq(&self.toplevel.read(), &target)
+	}
 	pub fn parent(&self) -> Option<Arc<Surface>> {
 		self.parent.lock().upgrade()
 	}
