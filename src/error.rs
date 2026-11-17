@@ -32,3 +32,15 @@ pub enum WaylandError {
 	#[error("Failed to Insert Object")]
 	FailedToInsertObject,
 }
+impl WaylandError {
+	/// the client hung up while we were still answering it
+	pub fn is_disconnect(&self) -> bool {
+		let (Self::Io(e) | Self::DecodeError(waynest::ProtocolError::IoError(e))) = self else {
+			return false;
+		};
+		matches!(
+			e.kind(),
+			io::ErrorKind::BrokenPipe | io::ErrorKind::ConnectionReset
+		)
+	}
+}

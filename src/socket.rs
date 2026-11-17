@@ -171,6 +171,10 @@ impl WaylandClient {
 						.dispatch_request(&mut client, msg.object_id(), &mut msg)
 						.await
 					{
+						if e.is_disconnect() {
+							tracing::debug!(?msg_clone, "Wayland client hung up mid request: {e}");
+							return Ok(());
+						}
 						if let WaylandError::Fatal { object_id, code, message } = e {
 							client.display()?.error(&mut client, ObjectId::DISPLAY, object_id, code, message.to_string()).await?;
 						}
