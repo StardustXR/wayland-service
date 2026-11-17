@@ -55,6 +55,18 @@ impl WlSubcompositor for Subcompositor {
 			});
 		};
 
+		let mut ancestor = Some(parent.clone());
+		while let Some(a) = ancestor {
+			if Arc::ptr_eq(&a, &surface) {
+				return Err(WaylandError::Fatal {
+					object_id: sender_id,
+					code: wl_subcompositor::Error::BadParent as u32,
+					message: "parent is the surface itself or one of its descendants",
+				});
+			}
+			ancestor = a.parent();
+		}
+
 		// Set the subsurface role
 		surface
 			.assign_role(SurfaceRole::Subsurface)
