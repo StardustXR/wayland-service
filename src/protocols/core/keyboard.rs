@@ -1,4 +1,4 @@
-use stardust_xr_fusion::keymap::Keymap;
+use stardust_xr_fusion::{keymap::Keymap, types::Timestamp};
 use stardust_xr_panels::panel_item::ModifierState;
 use std::{
 	os::fd::AsFd,
@@ -10,7 +10,11 @@ pub use waynest_protocols::server::core::wayland::wl_keyboard::*;
 use waynest_server::Client as _;
 
 use crate::{
-	KEYMAP_STORE, client::Client, error::WaylandResult, protocols::core::surface::Surface,
+	KEYMAP_STORE,
+	client::Client,
+	error::WaylandResult,
+	protocols::core::surface::Surface,
+	util::{WaylandTime as _, now},
 };
 
 /// a wl_keyboard is one physical keyboard as far as the client can tell,
@@ -90,10 +94,6 @@ impl Keyboard {
 			id,
 			state: Mutex::new(KeyboardState::Fresh),
 		}
-	}
-
-	fn time(client: &Client) -> WaylandResult<u32> {
-		Ok(client.display()?.creation_time.elapsed().as_millis() as u32)
 	}
 
 	/// false if the store doesn't know this keymap
@@ -234,6 +234,7 @@ impl Keyboard {
 		key: u32,
 		pressed: bool,
 		modifier_state: ModifierState,
+		time: Timestamp,
 	) -> WaylandResult<()> {
 		*LAST_KEYMAP.lock() = Some(keymap.clone());
 		let mut state = self.state.lock().await;
@@ -272,12 +273,11 @@ impl Keyboard {
 		}
 
 		let serial = client.next_event_serial();
-		let time = Self::time(client)?;
 		self.key(
 			client,
 			self.id,
 			serial,
-			time,
+			time.ms(),
 			key,
 			if pressed {
 				KeyState::Pressed
@@ -311,7 +311,7 @@ impl Keyboard {
 
 		for key in std::mem::take(pressed) {
 			let serial = client.next_event_serial();
-			let time = Self::time(client)?;
+			let time = now().ms();
 			self.key(client, self.id, serial, time, key, KeyState::Released)
 				.await?;
 		}

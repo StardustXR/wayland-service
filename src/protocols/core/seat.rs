@@ -9,6 +9,7 @@ use crate::protocols::core::{
 use mint::Vector2;
 use parking_lot::Mutex;
 use stardust_xr_fusion::keymap::Keymap;
+use stardust_xr_fusion::types::Timestamp;
 use stardust_xr_panels::panel_item::{ModifierState, ScrollSource};
 use std::sync::{Arc, Weak};
 use waynest::ObjectId;
@@ -21,24 +22,29 @@ pub enum SeatMessage {
 		surface: Arc<Surface>,
 		delta: Option<Vector2<f32>>,
 		position: Vector2<f32>,
+		time: Timestamp,
 	},
 	PointerButton {
 		surface: Arc<Surface>,
 		button: u32,
 		pressed: bool,
+		time: Timestamp,
 	},
 	PointerScrollDiscrete {
 		surface: Arc<Surface>,
 		delta: Vector2<f32>,
 		source: ScrollSource,
+		time: Timestamp,
 	},
 	PointerScrollPixels {
 		surface: Arc<Surface>,
 		delta: Vector2<f32>,
 		source: ScrollSource,
+		time: Timestamp,
 	},
 	PointerScrollStop {
 		surface: Arc<Surface>,
+		time: Timestamp,
 	},
 	KeyboardKey {
 		surface: Arc<Surface>,
@@ -46,18 +52,22 @@ pub enum SeatMessage {
 		key: u32,
 		pressed: bool,
 		modifier_state: ModifierState,
+		time: Timestamp,
 	},
 	TouchDown {
 		surface: Arc<Surface>,
 		id: u32,
 		position: Vector2<f32>,
+		time: Timestamp,
 	},
 	TouchMove {
 		id: u32,
 		position: Vector2<f32>,
+		time: Timestamp,
 	},
 	TouchUp {
 		id: u32,
+		time: Timestamp,
 	},
 	/// from the panel shell focusing or unfocusing a whole toplevel
 	KeyboardFocus {
@@ -119,15 +129,16 @@ impl Devices {
 				surface,
 				position,
 				delta,
+				time,
 			} => {
 				for pointer in self.pointers(client) {
 					if let Some(delta) = delta {
 						pointer
-							.handle_relative_pointer_motion(client, delta)
+							.handle_relative_pointer_motion(client, delta, time)
 							.await?;
 					}
 					pointer
-						.handle_absolute_pointer_motion(client, surface.clone(), position)
+						.handle_absolute_pointer_motion(client, surface.clone(), position, time)
 						.await?;
 				}
 			}
@@ -135,13 +146,14 @@ impl Devices {
 				surface,
 				button,
 				pressed,
+				time,
 			} => {
 				if pressed {
 					self.click_focus(client, &surface).await?;
 				}
 				for pointer in self.pointers(client) {
 					pointer
-						.handle_pointer_button(client, surface.clone(), button, pressed)
+						.handle_pointer_button(client, surface.clone(), button, pressed, time)
 						.await?;
 				}
 			}
@@ -149,10 +161,17 @@ impl Devices {
 				surface,
 				delta,
 				source,
+				time,
 			} => {
 				for pointer in self.pointers(client) {
 					pointer
-						.handle_pointer_scroll_discrete(client, surface.clone(), delta, source)
+						.handle_pointer_scroll_discrete(
+							client,
+							surface.clone(),
+							delta,
+							source,
+							time,
+						)
 						.await?;
 				}
 			}
@@ -160,17 +179,18 @@ impl Devices {
 				surface,
 				delta,
 				source,
+				time,
 			} => {
 				for pointer in self.pointers(client) {
 					pointer
-						.handle_pointer_scroll_pixels(client, surface.clone(), delta, source)
+						.handle_pointer_scroll_pixels(client, surface.clone(), delta, source, time)
 						.await?;
 				}
 			}
-			SeatMessage::PointerScrollStop { surface } => {
+			SeatMessage::PointerScrollStop { surface, time } => {
 				for pointer in self.pointers(client) {
 					pointer
-						.handle_pointer_scroll_stop(client, surface.clone())
+						.handle_pointer_scroll_stop(client, surface.clone(), time)
 						.await?;
 				}
 			}
@@ -180,6 +200,7 @@ impl Devices {
 				key,
 				pressed,
 				modifier_state,
+				time,
 			} => {
 				for keyboard in self.keyboards(client) {
 					keyboard
@@ -190,6 +211,7 @@ impl Devices {
 							key,
 							pressed,
 							modifier_state,
+							time,
 						)
 						.await?;
 				}
@@ -198,22 +220,23 @@ impl Devices {
 				surface,
 				id,
 				position,
+				time,
 			} => {
 				self.click_focus(client, &surface).await?;
 				for touch in self.touches(client) {
 					touch
-						.handle_touch_down(client, surface.clone(), id, position)
+						.handle_touch_down(client, surface.clone(), id, position, time)
 						.await?;
 				}
 			}
-			SeatMessage::TouchMove { id, position } => {
+			SeatMessage::TouchMove { id, position, time } => {
 				for touch in self.touches(client) {
-					touch.handle_touch_move(client, id, position).await?;
+					touch.handle_touch_move(client, id, position, time).await?;
 				}
 			}
-			SeatMessage::TouchUp { id } => {
+			SeatMessage::TouchUp { id, time } => {
 				for touch in self.touches(client) {
-					touch.handle_touch_up(client, id).await?;
+					touch.handle_touch_up(client, id, time).await?;
 				}
 			}
 			SeatMessage::KeyboardFocus { surface, focused } => {

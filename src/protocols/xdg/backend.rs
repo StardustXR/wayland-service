@@ -6,6 +6,7 @@ use crate::{
 		seat::{Seat, SeatMessage},
 		surface::Surface,
 	},
+	util::now,
 };
 use dashmap::DashMap;
 use gluon_ipc::{Handler, Node, RefExt};
@@ -254,7 +255,7 @@ impl PanelItemHandler for XdgBackend {
 		surface: SurfaceId,
 		delta: Option<Vec2F>,
 		position: Vec2F,
-		_timestamp: Option<Timestamp>,
+		timestamp: Option<Timestamp>,
 	) {
 		let Some(surface) = self.surface_from_id(&surface) else {
 			return;
@@ -270,6 +271,7 @@ impl PanelItemHandler for XdgBackend {
 					surface,
 					position,
 					delta,
+					time: timestamp.unwrap_or_else(now),
 				}));
 	}
 
@@ -279,7 +281,7 @@ impl PanelItemHandler for XdgBackend {
 		surface: SurfaceId,
 		button: u32,
 		pressed: bool,
-		_timestamp: Option<Timestamp>,
+		timestamp: Option<Timestamp>,
 	) {
 		if let Some(surface) = self.surface_from_id(&surface) {
 			let Some(toplevel) = self.toplevel() else {
@@ -290,6 +292,7 @@ impl PanelItemHandler for XdgBackend {
 					surface,
 					button,
 					pressed,
+					time: timestamp.unwrap_or_else(now),
 				},
 			));
 		}
@@ -301,7 +304,7 @@ impl PanelItemHandler for XdgBackend {
 		surface: SurfaceId,
 		delta: Vec2F,
 		source: ScrollSource,
-		_timestamp: Option<Timestamp>,
+		timestamp: Option<Timestamp>,
 	) {
 		if let Some(surface) = self.surface_from_id(&surface) {
 			let Some(toplevel) = self.toplevel() else {
@@ -312,6 +315,7 @@ impl PanelItemHandler for XdgBackend {
 					surface,
 					delta,
 					source,
+					time: timestamp.unwrap_or_else(now),
 				},
 			));
 		}
@@ -323,7 +327,7 @@ impl PanelItemHandler for XdgBackend {
 		surface: SurfaceId,
 		delta: Vec2F,
 		source: ScrollSource,
-		_timestamp: Option<Timestamp>,
+		timestamp: Option<Timestamp>,
 	) {
 		if let Some(surface) = self.surface_from_id(&surface) {
 			let Some(toplevel) = self.toplevel() else {
@@ -334,6 +338,7 @@ impl PanelItemHandler for XdgBackend {
 					surface,
 					delta,
 					source,
+					time: timestamp.unwrap_or_else(now),
 				},
 			));
 		}
@@ -343,16 +348,18 @@ impl PanelItemHandler for XdgBackend {
 		&self,
 		_ctx: gluon_ipc::Context,
 		surface: SurfaceId,
-		_timestamp: Option<Timestamp>,
+		timestamp: Option<Timestamp>,
 	) {
 		if let Some(surface) = self.surface_from_id(&surface) {
 			let Some(toplevel) = self.toplevel() else {
 				return;
 			};
-			let _ = toplevel
-				.wl_surface()
-				.message_sink
-				.send(Message::Seat(SeatMessage::PointerScrollStop { surface }));
+			let _ = toplevel.wl_surface().message_sink.send(Message::Seat(
+				SeatMessage::PointerScrollStop {
+					surface,
+					time: timestamp.unwrap_or_else(now),
+				},
+			));
 		}
 	}
 
@@ -364,7 +371,7 @@ impl PanelItemHandler for XdgBackend {
 		pressed: bool,
 		modifier_state: ModifierState,
 		keymap: Keymap,
-		_timestamp: Option<Timestamp>,
+		timestamp: Option<Timestamp>,
 	) {
 		tracing::debug!(
 			"Backend: Keyboard key {} {}",
@@ -385,6 +392,7 @@ impl PanelItemHandler for XdgBackend {
 						key,
 						pressed,
 						modifier_state,
+						time: timestamp.unwrap_or_else(now),
 					}));
 		}
 	}
@@ -395,7 +403,7 @@ impl PanelItemHandler for XdgBackend {
 		surface: SurfaceId,
 		id: u32,
 		position: Vec2F,
-		_timestamp: Option<Timestamp>,
+		timestamp: Option<Timestamp>,
 	) {
 		tracing::debug!(
 			"Backend: Touch down {} at ({}, {})",
@@ -415,6 +423,7 @@ impl PanelItemHandler for XdgBackend {
 						surface,
 						id,
 						position,
+						time: timestamp.unwrap_or_else(now),
 					}));
 		}
 	}
@@ -424,7 +433,7 @@ impl PanelItemHandler for XdgBackend {
 		_ctx: gluon_ipc::Context,
 		id: u32,
 		position: Vec2F,
-		_timestamp: Option<Timestamp>,
+		timestamp: Option<Timestamp>,
 	) {
 		tracing::debug!(
 			"Backend: Touch move {} to ({}, {})",
@@ -438,10 +447,14 @@ impl PanelItemHandler for XdgBackend {
 		let _ = toplevel
 			.wl_surface()
 			.message_sink
-			.send(Message::Seat(SeatMessage::TouchMove { id, position }));
+			.send(Message::Seat(SeatMessage::TouchMove {
+				id,
+				position,
+				time: timestamp.unwrap_or_else(now),
+			}));
 	}
 
-	async fn touch_up(&self, _ctx: gluon_ipc::Context, id: u32, _timestamp: Option<Timestamp>) {
+	async fn touch_up(&self, _ctx: gluon_ipc::Context, id: u32, timestamp: Option<Timestamp>) {
 		tracing::debug!("Backend: Touch up {}", id);
 		let Some(toplevel) = self.toplevel() else {
 			return;
@@ -449,7 +462,10 @@ impl PanelItemHandler for XdgBackend {
 		let _ = toplevel
 			.wl_surface()
 			.message_sink
-			.send(Message::Seat(SeatMessage::TouchUp { id }));
+			.send(Message::Seat(SeatMessage::TouchUp {
+				id,
+				time: timestamp.unwrap_or_else(now),
+			}));
 	}
 
 	async fn close_toplevel(&self, _ctx: gluon_ipc::Context) {

@@ -3,7 +3,6 @@ use std::{
 	io,
 	path::{Path, PathBuf},
 	sync::Arc,
-	time::Duration,
 };
 
 use tokio::{net::UnixStream, sync::mpsc};
@@ -203,9 +202,7 @@ impl WaylandClient {
 
 		match message {
 			Message::Frame(callbacks) => {
-				let now = rustix::time::clock_gettime(rustix::time::ClockId::Monotonic);
-				let now = Duration::new(now.tv_sec as u64, now.tv_nsec as u32);
-				let ms = (now.as_millis() % (u32::MAX as u128)) as u32;
+				let ms = crate::util::WaylandTime::ms(crate::util::now());
 				for callback in callbacks {
 					callback.done(client, callback.0, ms).await?;
 					client

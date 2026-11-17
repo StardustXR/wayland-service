@@ -53,12 +53,14 @@ impl RelativePointer {
 		&self,
 		client: &mut crate::client::Client,
 		delta: Vector2<f32>,
+		time: stardust_xr_fusion::types::Timestamp,
 	) -> WaylandResult<()> {
+		let utime = crate::util::WaylandTime::us(time);
 		self.relative_motion(
 			client,
 			self.0,
-			0,
-			0,
+			(utime >> 32) as u32,
+			utime as u32,
 			(delta.x as f64).into(),
 			(delta.y as f64).into(),
 			(delta.x as f64).into(),

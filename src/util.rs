@@ -4,6 +4,7 @@ pub mod registry;
 
 use parking_lot::Mutex;
 use rustix::process::RawPid;
+use stardust_xr_fusion::types::Timestamp;
 use std::{
 	collections::HashMap,
 	fmt::Debug,
@@ -200,5 +201,28 @@ impl CounterU32 {
 	}
 	pub fn get(&self) -> u32 {
 		self.0.fetch_add(1, Ordering::Relaxed)
+	}
+}
+
+/// stardust timestamps and wayland event times are both on CLOCK_MONOTONIC
+pub fn now() -> Timestamp {
+	let now = rustix::time::clock_gettime(rustix::time::ClockId::Monotonic);
+	Timestamp {
+		seconds: now.tv_sec as i64,
+		nanoseconds: now.tv_nsec as i64,
+	}
+}
+
+pub trait WaylandTime {
+	/// wayland event times are milliseconds that wrap around
+	fn ms(self) -> u32;
+	fn us(self) -> u64;
+}
+impl WaylandTime for Timestamp {
+	fn ms(self) -> u32 {
+		(self.seconds * 1000 + self.nanoseconds / 1_000_000) as u32
+	}
+	fn us(self) -> u64 {
+		(self.seconds * 1_000_000 + self.nanoseconds / 1000) as u64
 	}
 }

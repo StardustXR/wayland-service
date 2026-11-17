@@ -3,8 +3,10 @@ use crate::protocols::{core::surface::Surface, relative_pointer::RelativePointer
 use crate::{
 	client::Client,
 	error::{WaylandError, WaylandResult},
+	util::{WaylandTime as _, now},
 };
 use mint::Vector2;
+use stardust_xr_fusion::types::Timestamp;
 use stardust_xr_panels::panel_item::{Geometry, ScrollSource};
 use std::sync::Arc;
 use std::sync::Weak;
@@ -68,6 +70,7 @@ impl Pointer {
 		client: &mut Client,
 		surface: Arc<Surface>,
 		position: Vector2<f32>,
+		time: Timestamp,
 	) -> WaylandResult<()> {
 		tracing::debug!(
 			"Handling absolute pointer motion at ({}, {})",
@@ -106,7 +109,7 @@ impl Pointer {
 		self.motion(
 			client,
 			self.id,
-			0, // time
+			time.ms(),
 			(position.x as f64).into(),
 			(position.y as f64).into(),
 		)
@@ -122,6 +125,7 @@ impl Pointer {
 		&self,
 		client: &mut Client,
 		delta: Vector2<f32>,
+		time: Timestamp,
 	) -> WaylandResult<()> {
 		tracing::debug!(
 			"Handling relative pointer motion of ({}, {})",
@@ -133,7 +137,9 @@ impl Pointer {
 			return Ok(());
 		};
 
-		relative_pointer.send_relative_motion(client, delta).await
+		relative_pointer
+			.send_relative_motion(client, delta, time)
+			.await
 	}
 
 	pub async fn handle_pointer_button(
@@ -142,6 +148,7 @@ impl Pointer {
 		surface: Arc<Surface>,
 		button: u32,
 		pressed: bool,
+		time: Timestamp,
 	) -> WaylandResult<()> {
 		tracing::debug!(
 			"Handling pointer button {} {} on surface {:?}",
@@ -194,7 +201,7 @@ impl Pointer {
 			client,
 			self.id,
 			serial,
-			0, // time
+			time.ms(),
 			button,
 			if pressed {
 				ButtonState::Pressed
@@ -214,6 +221,7 @@ impl Pointer {
 		surface: Arc<Surface>,
 		delta: Vector2<f32>,
 		source: ScrollSource,
+		time: Timestamp,
 	) -> WaylandResult<()> {
 		if !self.focus.lock().await.is_on(&surface) {
 			return Ok(());
@@ -265,7 +273,7 @@ impl Pointer {
 			self.axis(
 				client,
 				self.id,
-				0, // time
+				time.ms(),
 				Axis::VerticalScroll,
 				(delta.y as f64).into(),
 			)
@@ -275,7 +283,7 @@ impl Pointer {
 			self.axis(
 				client,
 				self.id,
-				0, // time
+				time.ms(),
 				Axis::HorizontalScroll,
 				(delta.x as f64).into(),
 			)
@@ -322,6 +330,7 @@ impl Pointer {
 		surface: Arc<Surface>,
 		delta: Vector2<f32>,
 		source: ScrollSource,
+		time: Timestamp,
 	) -> WaylandResult<()> {
 		if !self.focus.lock().await.is_on(&surface) {
 			return Ok(());
@@ -343,7 +352,7 @@ impl Pointer {
 		self.axis(
 			client,
 			self.id,
-			0, // time
+			time.ms(),
 			Axis::HorizontalScroll,
 			(delta.x as f64).into(),
 		)
@@ -351,7 +360,7 @@ impl Pointer {
 		self.axis(
 			client,
 			self.id,
-			0, // time
+			time.ms(),
 			Axis::VerticalScroll,
 			(delta.y as f64).into(),
 		)
@@ -365,14 +374,15 @@ impl Pointer {
 		&self,
 		client: &mut Client,
 		surface: Arc<Surface>,
+		time: Timestamp,
 	) -> WaylandResult<()> {
 		if !self.focus.lock().await.is_on(&surface) {
 			return Ok(());
 		}
 		if self.version >= 5 {
-			self.axis_stop(client, self.id, 0, Axis::HorizontalScroll)
+			self.axis_stop(client, self.id, time.ms(), Axis::HorizontalScroll)
 				.await?;
-			self.axis_stop(client, self.id, 0, Axis::VerticalScroll)
+			self.axis_stop(client, self.id, time.ms(), Axis::VerticalScroll)
 				.await?;
 		}
 		if self.version >= 5 {
@@ -398,8 +408,15 @@ impl Pointer {
 		if let Focus::Grabbed { buttons, .. } = &*focus {
 			for button in buttons.clone() {
 				let serial = client.next_event_serial();
-				self.button(client, self.id, serial, 0, button, ButtonState::Released)
-					.await?;
+				self.button(
+					client,
+					self.id,
+					serial,
+					now().ms(),
+					button,
+					ButtonState::Released,
+				)
+				.await?;
 			}
 		}
 		let serial = client.next_event_serial();

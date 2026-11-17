@@ -1,5 +1,6 @@
 use mint::Vector2;
 use parking_lot::Mutex;
+use stardust_xr_fusion::types::Timestamp;
 use std::{
 	collections::HashMap,
 	sync::{Arc, Weak},
@@ -8,7 +9,9 @@ use waynest::ObjectId;
 pub use waynest_protocols::server::core::wayland::wl_touch::*;
 use waynest_server::Client as _;
 
-use crate::{client::Client, error::WaylandResult, protocols::core::surface::Surface};
+use crate::{
+	client::Client, error::WaylandResult, protocols::core::surface::Surface, util::WaylandTime as _,
+};
 
 #[derive(Debug, waynest_server::RequestDispatcher)]
 #[waynest(error = crate::error::WaylandError, connection = crate::client::Client)]
@@ -31,6 +34,7 @@ impl Touch {
 		surface: Arc<Surface>,
 		id: u32,
 		position: Vector2<f32>,
+		time: Timestamp,
 	) -> WaylandResult<()> {
 		if !client.holds(surface.id, &*surface) || self.points.lock().contains_key(&id) {
 			return Ok(());
@@ -41,7 +45,7 @@ impl Touch {
 			client,
 			self.id,
 			serial,
-			0,
+			time.ms(),
 			surface.id,
 			id as i32,
 			(position.x as f64).into(),
@@ -56,6 +60,7 @@ impl Touch {
 		client: &mut Client,
 		id: u32,
 		position: Vector2<f32>,
+		time: Timestamp,
 	) -> WaylandResult<()> {
 		if !self.points.lock().contains_key(&id) {
 			return Ok(());
@@ -63,7 +68,7 @@ impl Touch {
 		self.motion(
 			client,
 			self.id,
-			0,
+			time.ms(),
 			id as i32,
 			(position.x as f64).into(),
 			(position.y as f64).into(),
@@ -72,12 +77,18 @@ impl Touch {
 		self.frame(client, self.id).await
 	}
 
-	pub async fn handle_touch_up(&self, client: &mut Client, id: u32) -> WaylandResult<()> {
+	pub async fn handle_touch_up(
+		&self,
+		client: &mut Client,
+		id: u32,
+		time: Timestamp,
+	) -> WaylandResult<()> {
 		if self.points.lock().remove(&id).is_none() {
 			return Ok(());
 		}
 		let serial = client.next_event_serial();
-		self.up(client, self.id, serial, 0, id as i32).await?;
+		self.up(client, self.id, serial, time.ms(), id as i32)
+			.await?;
 		self.frame(client, self.id).await
 	}
 
