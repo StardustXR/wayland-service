@@ -321,11 +321,18 @@ impl WlDataOffer for DataOffer {
 		mime_type: String,
 		fd: OwnedFd,
 	) -> WaylandResult<()> {
-		let _ = self.owner.send(Message::ClipboardSend {
-			source: self.source.clone(),
-			mime_type,
-			fd,
-		});
+		let current = CLIPBOARD
+			.lock()
+			.as_ref()
+			.is_some_and(|s| Arc::ptr_eq(&s.source, &self.source));
+		// a stale offer just drops the fd, so the reader sees EOF
+		if current {
+			let _ = self.owner.send(Message::ClipboardSend {
+				source: self.source.clone(),
+				mime_type,
+				fd,
+			});
+		}
 		Ok(())
 	}
 
