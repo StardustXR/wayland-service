@@ -214,7 +214,7 @@ pub struct Surface {
 	presentation_feedback: Mutex<Vec<Arc<PresentationFeedback>>>,
 	state_buffer_manager: Arc<SurfaceCommitAwareBufferManager>,
 	children: Registry<Surface>,
-	parent: OnceLock<Weak<Surface>>,
+	parent: Mutex<Weak<Surface>>,
 	/// used to store unapplied surface updates, so they can be applied later
 	buffered_surface_update: Mutex<Option<BufferSubmit>>,
 	current_buffer_submit: Mutex<Option<BufferSubmit>>,
@@ -259,7 +259,7 @@ impl Surface {
 				presentation_feedback: Mutex::default(),
 				state_buffer_manager: manager,
 				children: Registry::new(),
-				parent: OnceLock::new(),
+				parent: Mutex::new(Weak::new()),
 				toplevel: RwLock::new(Weak::new()),
 				buffered_surface_update: Mutex::new(None),
 				current_buffer_submit: Mutex::new(None),
@@ -473,9 +473,16 @@ impl Surface {
 		// Copy parent's panel_item to subsurface (like popups do)
 		let toplevel = parent.toplevel.read();
 		*self.toplevel.write() = toplevel.clone();
+		drop(toplevel);
 
-		if self.parent.set(Arc::downgrade(parent)).is_ok() {
-			parent.children.add_raw(self);
+		self.unparent();
+		*self.parent.lock() = Arc::downgrade(parent);
+		parent.children.add_raw(self);
+	}
+	pub fn unparent(&self) {
+		let old = std::mem::take(&mut *self.parent.lock());
+		if let Some(old) = old.upgrade() {
+			old.children.remove(self);
 		}
 	}
 
@@ -493,7 +500,7 @@ impl Surface {
 		self.state_buffer_manager.clone()
 	}
 	pub fn parent(&self) -> Option<Arc<Surface>> {
-		self.parent.get()?.upgrade()
+		self.parent.lock().upgrade()
 	}
 	pub fn update_current_state_recursive(&self) {
 		info!("update current state");

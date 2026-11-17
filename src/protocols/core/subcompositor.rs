@@ -97,23 +97,21 @@ pub struct Subsurface {
 	id: ObjectId,
 	surface: Arc<Surface>,
 	state: Arc<Mutex<SurfaceCommitAwareBuffer<SubsurfaceState>>>,
-	child_id: Mutex<Option<u64>>,
 	is_sync: AtomicBool,
 }
 
 impl Subsurface {
 	pub fn new(id: ObjectId, surface: Arc<Surface>, parent: Arc<Surface>) -> Self {
-		let child_id = random();
+		// the role outlives this object, so a recreated subsurface keeps its child id
 		let _ = surface
 			.surface_id
-			.set(SurfaceUpdateTarget::Child { id: child_id });
+			.set(SurfaceUpdateTarget::Child { id: random() });
 		surface.set_parent(&parent);
 
 		Self {
 			id,
 			state: SurfaceCommitAwareBuffer::new(SubsurfaceState::default(), &surface),
 			surface,
-			child_id: Mutex::new(Some(child_id)),
 			is_sync: AtomicBool::new(true), // Subsurfaces start in sync mode
 		}
 	}
@@ -217,7 +215,7 @@ impl Subsurface {
 	}
 
 	fn create_child_info(&self, buffer_size: Option<Vector2<usize>>) -> Option<ChildState> {
-		let Some(id) = *self.child_id.lock() else {
+		let Some(SurfaceUpdateTarget::Child { id }) = self.surface.surface_id.get().copied() else {
 			tracing::error!("subsurface has no child id");
 			return None;
 		};
@@ -279,6 +277,7 @@ impl WlSubsurface for Subsurface {
 
 		// Clear the commit filter
 		self.surface.clear_parent_syncronized_filter();
+		self.surface.unparent();
 		self.surface.retire_role();
 
 		client.remove(self.id);
