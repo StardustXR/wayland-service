@@ -2,9 +2,10 @@ use crate::{
 	client::{Client, Message, MessageSink},
 	error::WaylandResult,
 };
+use parking_lot::Mutex;
 use std::{
 	os::fd::{AsFd, OwnedFd},
-	sync::{Arc, Mutex, MutexGuard},
+	sync::Arc,
 };
 use waynest::ObjectId;
 use waynest_protocols::server::core::wayland::{
@@ -45,15 +46,8 @@ struct ClipboardSelection {
 /// The current clipboard contents, set by the last client to call set_selection.
 static CLIPBOARD: Mutex<Option<ClipboardSelection>> = Mutex::new(None);
 
-fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-	m.lock().unwrap_or_else(|e| {
-		tracing::error!("clipboard mutex poisoned, recovering");
-		e.into_inner()
-	})
-}
-
 pub fn register_client(sink: MessageSink) {
-	lock(&CLIENTS).push(sink);
+	CLIENTS.lock().push(sink);
 }
 
 #[derive(Debug, waynest_server::RequestDispatcher)]
@@ -90,7 +84,7 @@ impl WlDataDeviceManager for DataDeviceManager {
 
 		// If a clipboard selection already exists, hand this brand-new device an offer
 		// for it immediately, otherwise it'd never find out about the current selection.
-		let existing = lock(&CLIPBOARD).as_ref().map(|selection| {
+		let existing = CLIPBOARD.lock().as_ref().map(|selection| {
 			(
 				selection.source.clone(),
 				selection.mime_types.clone(),
@@ -120,7 +114,7 @@ impl WlDataSource for DataSource {
 		_sender_id: ObjectId,
 		mime_type: String,
 	) -> WaylandResult<()> {
-		lock(&self.mime_types).push(mime_type);
+		self.mime_types.lock().push(mime_type);
 		Ok(())
 	}
 
@@ -173,20 +167,20 @@ impl WlDataDevice for DataDevice {
 	) -> WaylandResult<()> {
 		let Some(source_id) = source else {
 			// TODO: doesn't notify anyone that the selection was cleared.
-			*lock(&CLIPBOARD) = None;
+			*CLIPBOARD.lock() = None;
 			return Ok(());
 		};
 		let source = client.try_get::<DataSource>(source_id)?;
-		let mime_types = lock(&source.mime_types).clone();
+		let mime_types = source.mime_types.lock().clone();
 		let owner = client.message_sink()?;
 
-		*lock(&CLIPBOARD) = Some(ClipboardSelection {
+		*CLIPBOARD.lock() = Some(ClipboardSelection {
 			source: source.clone(),
 			mime_types: mime_types.clone(),
 			owner: owner.clone(),
 		});
 
-		for sink in lock(&CLIENTS).iter() {
+		for sink in CLIENTS.lock().iter() {
 			let _ = sink.send(Message::ClipboardSelection {
 				source: source.clone(),
 				mime_types: mime_types.clone(),
