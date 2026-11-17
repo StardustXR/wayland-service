@@ -334,7 +334,7 @@ impl PanelItemHandler for XdgBackend {
 				return;
 			};
 			let _ = toplevel.wl_surface().message_sink.send(Message::Seat(
-				SeatMessage::PointerScrollDiscrete {
+				SeatMessage::PointerScrollPixels {
 					surface,
 					delta,
 					source,
