@@ -62,6 +62,14 @@ impl Surface {
 		}
 	}
 
+	fn has_role_object(&self) -> bool {
+		match &*self.role_object.lock() {
+			RoleObject::Toplevel(t) => t.strong_count() > 0,
+			RoleObject::Popup(p) => p.strong_count() > 0,
+			RoleObject::None => false,
+		}
+	}
+
 	fn role_error(&self, e: RoleError) -> WaylandError {
 		match e {
 			RoleError::Occupied => WaylandError::Fatal {
@@ -219,20 +227,19 @@ impl XdgSurface for Surface {
 			.assign_role(SurfaceRole::XdgPopup)
 			.map_err(|e| self.role_error(e))?;
 
-		let Some(parent) = parent else {
-			return Err(WaylandError::Fatal {
-				object_id: popup_id,
-				code: 3,
-				message: "Parent surface does not have an XDG role",
-			});
+		let invalid_parent = |message| WaylandError::Fatal {
+			object_id: self.wm_base,
+			code: WmBaseError::InvalidPopupParent as u32,
+			message,
 		};
-		let Some(parent) = client.get::<Surface>(parent) else {
-			return Err(WaylandError::Fatal {
-				object_id: popup_id,
-				code: 3,
-				message: "Parent surface does not exist",
-			});
-		};
+		// a null parent is for protocols like layer shell to fill in, and none are offered here
+		let parent = parent.ok_or(invalid_parent("popup parent can't be null here"))?;
+		let parent = client
+			.get::<Surface>(parent)
+			.ok_or(invalid_parent("popup parent isn't a live xdg_surface"))?;
+		if !parent.has_role_object() {
+			return Err(invalid_parent("popup parent has no toplevel or popup"));
+		}
 		let toplevel = parent.wl_surface.toplevel.read().clone();
 		*self.wl_surface.toplevel.write() = toplevel;
 
