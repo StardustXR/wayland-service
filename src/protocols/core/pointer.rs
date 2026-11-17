@@ -14,12 +14,41 @@ use waynest_server::Client as _;
 
 pub use waynest_protocols::server::core::wayland::wl_pointer::*;
 
+/// a press keeps focus where it happened until every button is up again,
+/// so a drag that wanders off still gets its release
+#[derive(Debug)]
+enum Focus {
+	None,
+	Hovering(Weak<Surface>),
+	Grabbed {
+		surface: Weak<Surface>,
+		buttons: Vec<u32>,
+	},
+}
+impl Focus {
+	fn surface(&self) -> Option<Arc<Surface>> {
+		match self {
+			Self::None => None,
+			Self::Hovering(s) | Self::Grabbed { surface: s, .. } => s.upgrade(),
+		}
+	}
+	fn is_on(&self, surface: &Arc<Surface>) -> bool {
+		matches!(self, Self::Hovering(s) | Self::Grabbed { surface: s, .. } if s.as_ptr() == Arc::as_ptr(surface))
+	}
+	/// the client already forgot about a surface it destroyed, so no leave
+	fn drop_dead(&mut self, client: &Client) {
+		if self.surface().is_none_or(|s| !client.holds(s.id, &*s)) {
+			*self = Self::None;
+		}
+	}
+}
+
 #[derive(waynest_server::RequestDispatcher)]
 #[waynest(error = crate::error::WaylandError, connection = crate::client::Client)]
 pub struct Pointer {
 	pub id: ObjectId,
 	version: u32,
-	focused_surface: Mutex<Weak<Surface>>,
+	focus: Mutex<Focus>,
 	cursor_surface: Mutex<Option<Arc<Surface>>>,
 	pub relative_pointer: RwLock<Weak<RelativePointer>>,
 }
@@ -28,7 +57,7 @@ impl Pointer {
 		Self {
 			id,
 			version,
-			focused_surface: Mutex::new(Weak::new()),
+			focus: Mutex::new(Focus::None),
 			cursor_surface: Mutex::new(None),
 			relative_pointer: RwLock::new(Weak::new()),
 		}
@@ -48,27 +77,20 @@ impl Pointer {
 		if !client.holds(surface.id, &*surface) {
 			return Ok(());
 		}
-		let mut focused = self.focused_surface.lock().await;
+		let mut focus = self.focus.lock().await;
+		focus.drop_dead(client);
 
-		// If we're entering a new surface
-		if focused.as_ptr() != Arc::as_ptr(&surface) {
-			tracing::debug!("Surface transition detected");
-			// Send leave to old surface if it exists and is still alive
-			if let Some(old_surface) = focused.upgrade()
-				&& client.holds(old_surface.id, &*old_surface)
-			{
-				let serial = client.next_event_serial();
-				tracing::debug!("Sending leave event with serial {}", serial);
-				self.leave(client, self.id, serial, old_surface.id).await?;
+		if !focus.is_on(&surface) {
+			// stardust gives positions relative to whatever is under the pointer, there's no
+			// turning them into the grabbed surface's coordinates
+			if matches!(*focus, Focus::Grabbed { .. }) {
+				return Ok(());
 			}
-
-			// Send enter to new surface
+			if let Some(old) = focus.surface() {
+				let serial = client.next_event_serial();
+				self.leave(client, self.id, serial, old.id).await?;
+			}
 			let serial = client.next_event_serial();
-			tracing::debug!(
-				"Sending enter event with serial {} to surface {:?}",
-				serial,
-				surface.id
-			);
 			self.enter(
 				client,
 				self.id,
@@ -78,13 +100,9 @@ impl Pointer {
 				(position.y as f64).into(),
 			)
 			.await?;
-
-			// Update focused surface
-			*focused = Arc::downgrade(&surface);
+			*focus = Focus::Hovering(Arc::downgrade(&surface));
 		}
 
-		// Send motion event to current surface
-		tracing::debug!("Sending motion event to surface");
 		self.motion(
 			client,
 			self.id,
@@ -131,6 +149,46 @@ impl Pointer {
 			if pressed { "pressed" } else { "released" },
 			surface.id
 		);
+		let mut focus = self.focus.lock().await;
+		focus.drop_dead(client);
+		if pressed {
+			// without a position there's no entering this surface properly, so a press anywhere
+			// but the focused surface is dropped rather than misdirected
+			if !focus.is_on(&surface) {
+				return Ok(());
+			}
+			match &mut *focus {
+				Focus::Hovering(s) => {
+					let s = s.clone();
+					*focus = Focus::Grabbed {
+						surface: s,
+						buttons: vec![button],
+					};
+				}
+				Focus::Grabbed { buttons, .. } if !buttons.contains(&button) => {
+					buttons.push(button)
+				}
+				_ => return Ok(()),
+			}
+		} else {
+			// releases always go to the grab, wherever the pointer ended up
+			let Focus::Grabbed {
+				surface: s,
+				buttons,
+			} = &mut *focus
+			else {
+				return Ok(());
+			};
+			let Some(i) = buttons.iter().position(|b| *b == button) else {
+				return Ok(());
+			};
+			buttons.swap_remove(i);
+			if buttons.is_empty() {
+				let s = s.clone();
+				*focus = Focus::Hovering(s);
+			}
+		}
+
 		let serial = client.next_event_serial();
 		self.button(
 			client,
@@ -153,10 +211,13 @@ impl Pointer {
 	pub async fn handle_pointer_scroll_discrete(
 		&self,
 		client: &mut Client,
-		_surface: Arc<Surface>,
+		surface: Arc<Surface>,
 		delta: Vector2<f32>,
 		source: ScrollSource,
 	) -> WaylandResult<()> {
+		if !self.focus.lock().await.is_on(&surface) {
+			return Ok(());
+		}
 		tracing::info!(
 			"Handling discrete pointer scroll: steps={:?} on version {}",
 			delta,
@@ -258,10 +319,13 @@ impl Pointer {
 	pub async fn handle_pointer_scroll_pixels(
 		&self,
 		client: &mut Client,
-		_surface: Arc<Surface>,
+		surface: Arc<Surface>,
 		delta: Vector2<f32>,
 		source: ScrollSource,
 	) -> WaylandResult<()> {
+		if !self.focus.lock().await.is_on(&surface) {
+			return Ok(());
+		}
 		tracing::debug!("Handling pointer smooth scroll: distance={:?}", delta,);
 		if self.version >= 5 {
 			self.axis_source(
@@ -300,8 +364,11 @@ impl Pointer {
 	pub async fn handle_pointer_scroll_stop(
 		&self,
 		client: &mut Client,
-		_surface: Arc<Surface>,
+		surface: Arc<Surface>,
 	) -> WaylandResult<()> {
+		if !self.focus.lock().await.is_on(&surface) {
+			return Ok(());
+		}
 		if self.version >= 5 {
 			self.axis_stop(client, self.id, 0, Axis::HorizontalScroll)
 				.await?;
@@ -319,21 +386,28 @@ impl Pointer {
 		client: &mut Client,
 		toplevel_surface: &Surface,
 	) -> WaylandResult<()> {
-		let mut focused = self.focused_surface.lock().await;
-		let Some(old_surface) = focused.upgrade() else {
+		let mut focus = self.focus.lock().await;
+		focus.drop_dead(client);
+		let Some(old) = focus.surface() else {
 			return Ok(());
 		};
-		if !old_surface.same_toplevel(toplevel_surface) {
+		if !old.same_toplevel(toplevel_surface) {
 			return Ok(());
 		}
-		if client.holds(old_surface.id, &*old_surface) {
-			let serial = client.next_event_serial();
-			self.leave(client, self.id, serial, old_surface.id).await?;
-			if self.version >= 5 {
-				self.frame(client, self.id).await?;
+		// a leave alone doesn't tell the client its held buttons went up
+		if let Focus::Grabbed { buttons, .. } = &*focus {
+			for button in buttons.clone() {
+				let serial = client.next_event_serial();
+				self.button(client, self.id, serial, 0, button, ButtonState::Released)
+					.await?;
 			}
 		}
-		*focused = Weak::new();
+		let serial = client.next_event_serial();
+		self.leave(client, self.id, serial, old.id).await?;
+		if self.version >= 5 {
+			self.frame(client, self.id).await?;
+		}
+		*focus = Focus::None;
 		Ok(())
 	}
 
@@ -355,7 +429,7 @@ impl WlPointer for Pointer {
 		hotspot_x: i32,
 		hotspot_y: i32,
 	) -> WaylandResult<()> {
-		if let Some(focused_surface) = self.focused_surface.lock().await.upgrade()
+		if let Some(focused_surface) = self.focus.lock().await.surface()
 			&& let Some(panel_item) = focused_surface.panel_item()
 		{
 			let geometry = surface.and_then(|s| client.get::<Surface>(s)).map(|s| {
@@ -388,7 +462,7 @@ impl WlPointer for Pointer {
 		_ = surface
 			.surface_id
 			.set(stardust_xr_panels::panel_item::SurfaceUpdateTarget::Cursor);
-		if let Some(focused_surface) = self.focused_surface.lock().await.upgrade() {
+		if let Some(focused_surface) = self.focus.lock().await.surface() {
 			*surface.toplevel.write() = focused_surface.toplevel.read().clone();
 		}
 		// a kinda ugly hack to get the cursor to show on startup
