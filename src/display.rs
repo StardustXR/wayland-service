@@ -21,6 +21,9 @@ use waynest::ObjectId;
 pub use waynest_protocols::server::core::wayland::wl_display::*;
 use waynest_server::Client as _;
 
+/// ids from here up are ours, below are the client's
+pub const SERVER_ID_START: u32 = 0xff000000;
+
 #[derive(waynest_server::RequestDispatcher)]
 #[waynest(error = crate::error::WaylandError, connection = crate::client::Client)]
 pub struct Display {
@@ -40,7 +43,7 @@ impl Display {
 			seat: OnceLock::new(),
 			output: OnceLock::new(),
 			data_device: Mutex::new(None),
-			id_counter: CounterU32::new(0xff000000), // Start at 0xff000000 to avoid conflicts with client-generated IDs
+			id_counter: CounterU32::new(SERVER_ID_START),
 			creation_time: Instant::now(),
 		}
 	}

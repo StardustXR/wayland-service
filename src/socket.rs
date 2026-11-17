@@ -2,6 +2,7 @@ use std::{
 	fs::{self, File, remove_file},
 	io,
 	path::{Path, PathBuf},
+	sync::Arc,
 	time::Duration,
 };
 
@@ -14,7 +15,7 @@ use waynest_server::{Client as _, Listener};
 
 use crate::{
 	client::{Client, Message},
-	display::Display,
+	display::{Display, SERVER_ID_START},
 	error::{WaylandError, WaylandResult},
 	util::AbortOnDrop,
 };
@@ -165,11 +166,19 @@ impl WaylandClient {
 					};
 					let msg_clone = msg.clone();
 					tracing::trace!(?msg, "dispatching wayland event");
-					if let Err(e) = client
-						.get_raw(msg.object_id())
-						.ok_or(WaylandError::MissingObject(msg.object_id()))?
-						.dispatch_request(&mut client, msg.object_id(), &mut msg)
-						.await
+					let id = msg.object_id();
+					let target = client.get_raw(id).ok_or(WaylandError::MissingObject(id))?;
+					let result = target.dispatch_request(&mut client, id, &mut msg).await;
+					// a destructor took it out of the store, and the client can't reuse the id until told
+					if id.as_raw() < SERVER_ID_START
+						&& client
+							.get_raw(id)
+							.is_none_or(|o| !std::ptr::addr_eq(Arc::as_ptr(&o), Arc::as_ptr(&target)))
+					{
+						client.display()?.delete_id(&mut client, ObjectId::DISPLAY, id.as_raw()).await?;
+					}
+					drop(target);
+					if let Err(e) = result
 					{
 						if e.is_disconnect() {
 							tracing::debug!(?msg_clone, "Wayland client hung up mid request: {e}");
