@@ -232,6 +232,9 @@ impl WaylandClient {
 			Message::ReconfigureToplevel(toplevel) => {
 				toplevel.reconfigure(client).await?;
 			}
+			Message::ConfigurePopup(popup) => {
+				popup.send_configure(client).await?;
+			}
 			Message::SetToplevelVisualActive { toplevel, active } => {
 				toplevel.set_activated(active);
 				toplevel.reconfigure(client).await?;

@@ -11,19 +11,22 @@ use crate::{
 	util::get_env,
 };
 
-use super::{backend::XdgBackend, popup::Popup, positioner::Positioner, toplevel::Commit};
+use super::{
+	backend::XdgBackend,
+	popup::{self, Popup},
+	positioner::Positioner,
+	toplevel::Commit,
+};
 use crate::protocols::core::seat::Seat;
 use gluon_ipc::Node;
 use mint::Vector2;
 use parking_lot::Mutex;
 use stardust_xr_fusion::spatial::{Spatial, SpatialExt as _, Transform};
-use stardust_xr_panels::panel_item::{ChildState, Rect, SurfaceId, SurfaceUpdateTarget};
+use stardust_xr_panels::panel_item::{SurfaceId, SurfaceUpdateTarget};
 use std::sync::{Arc, Weak};
 use waynest::ObjectId;
 pub use waynest_protocols::server::stable::xdg_shell::xdg_surface::*;
-use waynest_protocols::server::stable::xdg_shell::{
-	xdg_popup::XdgPopup, xdg_wm_base::Error as WmBaseError,
-};
+use waynest_protocols::server::stable::xdg_shell::xdg_wm_base::Error as WmBaseError;
 use waynest_server::Client as _;
 
 #[derive(Debug, waynest_server::RequestDispatcher)]
@@ -33,8 +36,15 @@ pub struct Surface {
 	version: u32,
 	pub wm_base: ObjectId,
 	pub wl_surface: Arc<crate::protocols::core::surface::Surface>,
-	configured: Arc<std::sync::atomic::AtomicBool>,
-	toplevel: Mutex<Weak<Toplevel>>,
+	role_object: Mutex<RoleObject>,
+}
+
+/// whichever role object currently plays this surface's role, so acks reach it
+#[derive(Debug)]
+enum RoleObject {
+	None,
+	Toplevel(Weak<Toplevel>),
+	Popup(Weak<Popup>),
 }
 impl Surface {
 	pub fn new(
@@ -48,8 +58,7 @@ impl Surface {
 			version,
 			wm_base,
 			wl_surface,
-			configured: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-			toplevel: Mutex::new(Weak::new()),
+			role_object: Mutex::new(RoleObject::None),
 		}
 	}
 
@@ -167,7 +176,7 @@ impl XdgSurface for Surface {
 		let pid = display.pid;
 		let message_tx = client.message_sink()?.clone();
 		*self.wl_surface.toplevel.write() = toplevel_weak.clone();
-		*self.toplevel.lock() = toplevel_weak.clone();
+		*self.role_object.lock() = RoleObject::Toplevel(toplevel_weak.clone());
 		self.wl_surface.add_commit_handler(move |surface| {
 			let Some(toplevel) = toplevel_weak.upgrade() else {
 				return false;
@@ -201,7 +210,7 @@ impl XdgSurface for Surface {
 	async fn get_popup(
 		&self,
 		client: &mut Self::Connection,
-		sender_id: ObjectId,
+		_sender_id: ObjectId,
 		popup_id: ObjectId,
 		parent: Option<ObjectId>,
 		positioner: ObjectId,
@@ -231,69 +240,29 @@ impl XdgSurface for Surface {
 			.try_get::<Positioner>(positioner)?
 			.complete(self.wm_base)?;
 
-		let surface = client.try_get::<Surface>(self.id)?;
-
-		let popup = client.insert(
-			popup_id,
-			Popup::new(self.version, surface, positioner, popup_id),
-		)?;
-
-		let positioner_geometry = positioner.infinite_geometry();
-
-		popup
-			.configure(
-				client,
-				popup_id,
-				positioner_geometry.origin.x,
-				positioner_geometry.origin.y,
-				positioner_geometry.size.x as i32,
-				positioner_geometry.size.y as i32,
-			)
-			.await?;
-		let serial = client.next_event_serial();
-		self.configure(client, sender_id, serial).await?;
-
-		let Some(SurfaceUpdateTarget::Child { id }) = self.wl_surface.surface_id.get() else {
-			return Ok(());
-		};
-		let Some(parent_id) = parent.wl_surface.surface_id.get() else {
-			return Ok(());
-		};
-		let parent_id = match *parent_id {
+		let parent_id = parent.wl_surface.surface_id.get().map(|id| match *id {
 			SurfaceUpdateTarget::Toplevel => SurfaceId::Toplevel,
 			SurfaceUpdateTarget::Child { id } => SurfaceId::Child { id },
 			SurfaceUpdateTarget::Cursor => {
 				tracing::error!("creating popup for cursor, defaulting to toplevel instead");
 				SurfaceId::Toplevel
 			}
-		};
-
-		let child_info = ChildState {
-			id: *id,
-			parent: parent_id,
-			geometry: positioner_geometry,
-			z_order: 1,
-			input_regions: vec![Rect {
-				origin: Vector2::from([0.0; 2]),
-				size: Vector2::from([1.0; 2]),
-			}],
-		};
+		});
+		let surface = client.try_get::<Surface>(self.id)?;
+		let popup = client.insert(
+			popup_id,
+			Popup::new(self.version, surface, parent_id, positioner, popup_id),
+		)?;
 
 		let popup_weak = Arc::downgrade(&popup);
-		let configured = self.configured.clone();
+		*self.role_object.lock() = RoleObject::Popup(popup_weak.clone());
+		let message_tx = client.message_sink()?;
 		self.wl_surface.add_commit_handler(move |surface| {
 			let Some(popup) = popup_weak.upgrade() else {
 				return false;
 			};
-			let Some(panel_item) = surface.panel_item() else {
-				return true;
-			};
-
-			if configured.load(std::sync::atomic::Ordering::SeqCst)
-				&& surface.currently_has_valid_buffer()
-			{
-				panel_item.add_child(&popup.surface.wl_surface, child_info.clone());
-				return false;
+			if let popup::Commit::Configure = popup.commit(surface.currently_has_valid_buffer()) {
+				let _ = message_tx.send(Message::ConfigurePopup(popup));
 			}
 			true
 		});
@@ -323,11 +292,11 @@ impl XdgSurface for Surface {
 		_sender_id: ObjectId,
 		_serial: u32,
 	) -> WaylandResult<()> {
-		self.configured
-			.store(true, std::sync::atomic::Ordering::SeqCst);
-		if let Some(toplevel) = self.toplevel.lock().upgrade() {
-			toplevel.acked();
-		}
+		match &*self.role_object.lock() {
+			RoleObject::Toplevel(t) => t.upgrade().map(|t| t.acked()),
+			RoleObject::Popup(p) => p.upgrade().map(|p| p.acked()),
+			RoleObject::None => None,
+		};
 		Ok(())
 	}
 }

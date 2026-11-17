@@ -18,7 +18,7 @@ use crate::{
 			surface::Surface,
 		},
 		presentation::MonotonicTimestamp,
-		xdg::toplevel::Toplevel,
+		xdg::{popup::Popup, toplevel::Toplevel},
 	},
 };
 
@@ -37,6 +37,7 @@ pub enum Message {
 		size: Option<Size2>,
 	},
 	ReconfigureToplevel(Arc<Toplevel>),
+	ConfigurePopup(Arc<Popup>),
 	SetToplevelVisualActive {
 		toplevel: Arc<Toplevel>,
 		active: bool,
