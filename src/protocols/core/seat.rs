@@ -215,7 +215,7 @@ impl Seat {
 					keyboard.reset(client, &surface).await?;
 				}
 				if let Some(touch) = self.live_touch(client) {
-					touch.reset(client).await?;
+					touch.reset(client, &surface).await?;
 				}
 			}
 		}
@@ -242,7 +242,7 @@ impl Seat {
 		self.keyboard.get().filter(|k| client.holds(k.id, &***k))
 	}
 	fn live_touch(&self, client: &Client) -> Option<&Arc<Touch>> {
-		self.touch.get().filter(|t| client.holds(t.0, &***t))
+		self.touch.get().filter(|t| client.holds(t.id, &***t))
 	}
 
 	pub async fn cursor_surface(&self) -> Option<Arc<Surface>> {
@@ -288,7 +288,7 @@ impl WlSeat for Seat {
 		_sender_id: ObjectId,
 		id: ObjectId,
 	) -> WaylandResult<()> {
-		let touch = client.insert(id, Touch(id))?;
+		let touch = client.insert(id, Touch::new(id))?;
 		let _ = self.touch.set(touch);
 		Ok(())
 	}
