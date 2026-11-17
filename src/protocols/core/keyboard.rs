@@ -1,64 +1,83 @@
-use dashmap::{DashMap, DashSet};
-use memfd::MemfdOptions;
 use stardust_xr_fusion::keymap::Keymap;
 use stardust_xr_panels::panel_item::ModifierState;
 use std::{
-	io::Write,
-	os::{
-		fd::{AsFd, IntoRawFd},
-		unix::io::{FromRawFd, OwnedFd},
-	},
+	os::fd::AsFd,
 	sync::{Arc, Weak},
 };
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::Mutex;
 use waynest::ObjectId;
 pub use waynest_protocols::server::core::wayland::wl_keyboard::*;
+use waynest_server::Client as _;
 
 use crate::{
 	KEYMAP_STORE, client::Client, error::WaylandResult, protocols::core::surface::Surface,
 };
 
+/// a wl_keyboard is one physical keyboard as far as the client can tell,
+/// so held keys follow focus around instead of belonging to a surface
+enum KeyboardState {
+	/// no keymap sent yet, the client can't make sense of anything else until then
+	Fresh,
+	Unfocused {
+		keymap: u64,
+	},
+	/// pressed is exactly what the client believes is held down
+	Focused {
+		keymap: u64,
+		surface: Weak<Surface>,
+		pressed: Vec<u32>,
+	},
+}
+impl KeyboardState {
+	fn keymap(&self) -> Option<u64> {
+		match self {
+			Self::Fresh => None,
+			Self::Unfocused { keymap } | Self::Focused { keymap, .. } => Some(*keymap),
+		}
+	}
+	fn set_keymap(&mut self, id: u64) {
+		match self {
+			Self::Fresh => *self = Self::Unfocused { keymap: id },
+			Self::Unfocused { keymap } | Self::Focused { keymap, .. } => *keymap = id,
+		}
+	}
+	fn is_focused_on(&self, surface: &Arc<Surface>) -> bool {
+		matches!(self, Self::Focused { surface: s, .. } if s.as_ptr() == Arc::as_ptr(surface))
+	}
+	/// the client already forgot about everything on a surface it destroyed, so no leave
+	fn drop_dead_focus(&mut self, client: &Client) {
+		if let Self::Focused {
+			keymap, surface, ..
+		} = self && alive(client, surface).is_none()
+		{
+			*self = Self::Unfocused { keymap: *keymap };
+		}
+	}
+}
+
+// panel items can keep a surface's Arc around after the client destroyed it
+fn alive(client: &Client, surface: &Weak<Surface>) -> Option<Arc<Surface>> {
+	let s = surface.upgrade()?;
+	client.get::<Surface>(s.id).filter(|c| Arc::ptr_eq(c, &s))
+}
+
 #[derive(waynest_server::RequestDispatcher)]
 #[waynest(error = crate::error::WaylandError, connection = crate::client::Client)]
 pub struct Keyboard {
 	pub id: ObjectId,
-	focused_surface: Mutex<Weak<Surface>>,
-	pressed_keys: DashMap<ObjectId, DashSet<u32>>,
-	// TODO: maybe just store a hash here to not keep the handle alive?
-	current_keymap_id: RwLock<Option<u64>>,
+	state: Mutex<KeyboardState>,
 }
 
 impl Keyboard {
 	pub fn new(id: ObjectId) -> Self {
 		Self {
 			id,
-			focused_surface: Mutex::new(Weak::new()),
-			pressed_keys: DashMap::default(),
-			current_keymap_id: RwLock::new(None),
+			state: Mutex::new(KeyboardState::Fresh),
 		}
 	}
 
-	async fn send_keymap(&self, client: &mut Client, keymap: &[u8]) -> WaylandResult<()> {
-		let mut file = MemfdOptions::default()
-			.create("stardust-keymap")?
-			.into_file();
-		file.set_len(keymap.len() as u64)?;
-		file.write_all(keymap)?;
-		file.flush()?;
-
-		let fd = unsafe { OwnedFd::from_raw_fd(file.into_raw_fd()) };
-
-		// Send keymap to client
-		self.keymap(
-			client,
-			self.id,
-			KeymapFormat::XkbV1,
-			fd.as_fd(),
-			keymap.len() as u32,
-		)
-		.await?;
-
-		Ok(())
+	fn time(client: &Client) -> WaylandResult<u32> {
+		Ok(client.display()?.creation_time.elapsed().as_millis() as u32)
 	}
 
 	/// has to be the wayland key, so -8 or whatever
@@ -75,54 +94,44 @@ impl Keyboard {
 			tracing::warn!("invalid keymap");
 			return Ok(());
 		};
-		if self
-			.current_keymap_id
-			.read()
-			.await
-			.as_ref()
-			.is_none_or(|v| v != &keymap_id)
-		{
-			let Ok(Some(fd)) = KEYMAP_STORE.wait().get(keymap.clone()).await else {
+		let mut state = self.state.lock().await;
+		if state.keymap() != Some(keymap_id) {
+			let Ok(Some(fd)) = KEYMAP_STORE.wait().get(keymap).await else {
 				return Ok(());
 			};
 			self.keymap(client, self.id, KeymapFormat::XkbV1, fd.fd.as_fd(), fd.size)
 				.await?;
-			self.current_keymap_id.write().await.replace(keymap_id);
-		};
-
-		// PRESSED KEYS UPDATE
-		let pressed_keys = self.pressed_keys.entry(surface.id).or_default();
-		if pressed {
-			pressed_keys.insert(key);
-		} else {
-			pressed_keys.remove(&key);
+			state.set_keymap(keymap_id);
 		}
-		// println!("pressed keys: {:?}", &*pressed_keys);
+		state.drop_dead_focus(client);
 
-		// FOCUS UPDATES
-		let mut focused = self.focused_surface.lock().await;
+		if pressed && !state.is_focused_on(&surface) {
+			let carried = match &mut *state {
+				KeyboardState::Focused {
+					surface: old,
+					pressed,
+					..
+				} => {
+					let old = old.upgrade().map(|s| s.id);
+					let carried = std::mem::take(pressed);
+					if let Some(old) = old {
+						let serial = client.next_event_serial();
+						self.leave(client, self.id, serial, old).await?;
+					}
+					carried
+				}
+				_ => Vec::new(),
+			};
 
-		let refocus = focused.as_ptr() != Arc::as_ptr(&surface);
-		// If we're entering a new surface
-		if refocus {
-			// Send leave to old surface if it exists and is still alive
-			if let Some(old_surface) = focused.upgrade() {
-				let serial = client.next_event_serial();
-				self.leave(client, self.id, serial, old_surface.id).await?;
-				// println!("Left surface {}", old_surface.id);
-			}
-
-			// Send enter to new surface
 			let serial = client.next_event_serial();
 			self.enter(
 				client,
 				self.id,
 				serial,
 				surface.id,
-				pressed_keys.iter().flat_map(|k| k.to_ne_bytes()).collect(),
+				carried.iter().flat_map(|k| k.to_ne_bytes()).collect(),
 			)
 			.await?;
-
 			let serial = client.next_event_serial();
 			self.modifiers(
 				client,
@@ -131,26 +140,39 @@ impl Keyboard {
 				modifier_state.depressed,
 				modifier_state.latched,
 				modifier_state.locked,
-				0,
+				modifier_state.layout_group,
 			)
 			.await?;
-			// println!("Entered new surface {}", surface.id);
 
-			// Update focused surface
-			*focused = Arc::downgrade(&surface);
+			*state = KeyboardState::Focused {
+				keymap: keymap_id,
+				surface: Arc::downgrade(&surface),
+				pressed: carried,
+			};
 		}
 
-		// KEY EVENT SENDING
+		let KeyboardState::Focused { pressed: held, .. } = &mut *state else {
+			return Ok(());
+		};
+		if pressed {
+			if held.contains(&key) {
+				return Ok(());
+			}
+			held.push(key);
+		} else {
+			let Some(i) = held.iter().position(|k| *k == key) else {
+				return Ok(());
+			};
+			held.swap_remove(i);
+		}
+
 		let serial = client.next_event_serial();
-		// println!(
-		// 	"Sent key {key} {}",
-		// 	if pressed { "pressed" } else { "released" }
-		// );
+		let time = Self::time(client)?;
 		self.key(
 			client,
 			self.id,
 			serial,
-			client.display()?.creation_time.elapsed().as_millis() as u32, // time
+			time,
 			key,
 			if pressed {
 				KeyState::Pressed
@@ -160,7 +182,6 @@ impl Keyboard {
 		)
 		.await?;
 
-		// println!("Update modifiers");
 		let serial = client.next_event_serial();
 		self.modifiers(
 			client,
@@ -177,10 +198,18 @@ impl Keyboard {
 	}
 
 	pub async fn reset(&self, client: &mut Client) -> WaylandResult<()> {
-		if self.current_keymap_id.read().await.is_none() {
+		let mut state = self.state.lock().await;
+		state.drop_dead_focus(client);
+		let KeyboardState::Focused { pressed, .. } = &mut *state else {
 			return Ok(());
-		}
+		};
 
+		for key in std::mem::take(pressed) {
+			let serial = client.next_event_serial();
+			let time = Self::time(client)?;
+			self.key(client, self.id, serial, time, key, KeyState::Released)
+				.await?;
+		}
 		let serial = client.next_event_serial();
 		self.modifiers(client, self.id, serial, 0, 0, 0, 0).await
 	}
