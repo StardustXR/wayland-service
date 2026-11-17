@@ -3,7 +3,7 @@ use crate::error::WaylandResult;
 use crate::protocols::core::{
 	keyboard::{Keyboard, WlKeyboard as _},
 	pointer::Pointer,
-	surface::Surface,
+	surface::{Surface, SurfaceRole},
 	touch::Touch,
 };
 use mint::Vector2;
@@ -58,6 +58,11 @@ pub enum SeatMessage {
 	},
 	TouchUp {
 		id: u32,
+	},
+	/// from the panel shell focusing or unfocusing a whole toplevel
+	KeyboardFocus {
+		surface: Arc<Surface>,
+		focused: bool,
 	},
 	Reset,
 }
@@ -119,6 +124,9 @@ impl Seat {
 				button,
 				pressed,
 			} => {
+				if pressed {
+					self.click_focus(client, &surface).await?;
+				}
 				if let Some(pointer) = self.live_pointer(client) {
 					pointer
 						.handle_pointer_button(client, surface, button, pressed)
@@ -170,6 +178,7 @@ impl Seat {
 				id,
 				position,
 			} => {
+				self.click_focus(client, &surface).await?;
 				if let Some(touch) = self.live_touch(client) {
 					touch
 						.handle_touch_down(client, surface, id, position)
@@ -184,6 +193,15 @@ impl Seat {
 			SeatMessage::TouchUp { id } => {
 				if let Some(touch) = self.live_touch(client) {
 					touch.handle_touch_up(client, id).await?;
+				}
+			}
+			SeatMessage::KeyboardFocus { surface, focused } => {
+				if let Some(keyboard) = self.live_keyboard(client) {
+					if focused {
+						keyboard.focus_toplevel(client, surface).await?;
+					} else {
+						keyboard.unfocus_toplevel(client, &surface).await?;
+					}
 				}
 			}
 			SeatMessage::Reset => {
@@ -201,6 +219,19 @@ impl Seat {
 		Ok(())
 	}
 
+	/// subsurfaces are part of their parent, focus goes to the popup or toplevel they belong to
+	async fn click_focus(&self, client: &mut Client, surface: &Arc<Surface>) -> WaylandResult<()> {
+		let Some(keyboard) = self.live_keyboard(client) else {
+			return Ok(());
+		};
+		let mut target = surface.clone();
+		while target.plays(SurfaceRole::Subsurface)
+			&& let Some(parent) = target.parent()
+		{
+			target = parent;
+		}
+		keyboard.focus(client, target).await
+	}
 	fn live_pointer(&self, client: &Client) -> Option<&Arc<Pointer>> {
 		self.pointer.get().filter(|p| client.holds(p.id, &***p))
 	}

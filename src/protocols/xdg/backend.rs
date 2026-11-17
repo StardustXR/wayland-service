@@ -499,6 +499,14 @@ impl PanelItemHandler for XdgBackend {
 				toplevel: toplevel.clone(),
 				active: focused,
 			});
+		let _ =
+			toplevel
+				.wl_surface()
+				.message_sink
+				.send(Message::Seat(SeatMessage::KeyboardFocus {
+					surface: toplevel.wl_surface().clone(),
+					focused,
+				}));
 	}
 }
 impl XdgBackend {
