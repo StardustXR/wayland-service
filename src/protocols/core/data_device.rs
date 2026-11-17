@@ -22,7 +22,6 @@ use waynest_server::Client as _;
 // - Only one global clipboard selection is tracked (no per-seat scoping), and only one
 //   wl_data_device per client is supported (mirrors the existing single-seat/output
 //   assumption elsewhere in this codebase), the most recently created one wins.
-// - set_selection with `source: None` (clearing the selection) doesn't notify anyone.
 // - No serial validation anywhere.
 //
 // This whole in-process broadcast scheme is a stand-in and should be swapped out for a
@@ -186,10 +185,10 @@ impl WlDataDevice for DataDevice {
 		_serial: u32,
 	) -> WaylandResult<()> {
 		let Some(source_id) = source else {
-			// TODO: doesn't notify anyone that the selection was cleared.
 			let old = CLIPBOARD.lock().take();
 			if let Some(old) = old {
 				old.cancel();
+				broadcast_selection(None);
 			}
 			return Ok(());
 		};
