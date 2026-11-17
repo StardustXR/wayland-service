@@ -33,7 +33,7 @@ use waynest_server::Client as _;
 #[waynest(error = crate::error::WaylandError, connection = crate::client::Client)]
 pub struct Surface {
 	id: ObjectId,
-	version: u32,
+	pub(super) version: u32,
 	pub wm_base: ObjectId,
 	pub wl_surface: Arc<crate::protocols::core::surface::Surface>,
 	role_object: Mutex<RoleObject>,

@@ -223,10 +223,22 @@ impl Toplevel {
 	}
 
 	pub async fn reconfigure(&self, client: &mut Client) -> WaylandResult<()> {
-		if !client.holds(self.id, self)
-			|| matches!(*self.lifecycle.lock(), Lifecycle::AwaitingInitialCommit)
-		{
+		if !client.holds(self.id, self) {
 			return Ok(());
+		}
+		let initial = match *self.lifecycle.lock() {
+			Lifecycle::AwaitingInitialCommit => return Ok(()),
+			Lifecycle::AwaitingAck => true,
+			_ => false,
+		};
+		if initial && self.xdg_surface.version >= 5 {
+			// fullscreen is the only toplevel request that does anything here, the rest are ignored
+			self.wm_capabilities(
+				client,
+				self.id,
+				(WmCapabilities::Fullscreen as u32).to_ne_bytes().to_vec(),
+			)
+			.await?;
 		}
 		let data = self.data.lock().clone();
 
