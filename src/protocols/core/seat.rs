@@ -1,7 +1,10 @@
 use crate::client::Client;
 use crate::error::WaylandResult;
 use crate::protocols::core::{
-	keyboard::Keyboard, pointer::Pointer, surface::Surface, touch::Touch,
+	keyboard::{Keyboard, WlKeyboard as _},
+	pointer::Pointer,
+	surface::Surface,
+	touch::Touch,
 };
 use mint::Vector2;
 use stardust_xr_fusion::keymap::Keymap;
@@ -236,6 +239,10 @@ impl WlSeat for Seat {
 	) -> WaylandResult<()> {
 		tracing::info!("Getting keyboard");
 		let keyboard = client.insert(id, Keyboard::new(id))?;
+		// stardust doesn't repeat keys itself, so clients have to
+		if self.version >= 4 {
+			keyboard.repeat_info(client, id, 25, 600).await?;
+		}
 		let _ = self.keyboard.set(keyboard);
 		Ok(())
 	}
