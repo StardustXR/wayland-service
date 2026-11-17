@@ -21,6 +21,7 @@ use crate::{
 		},
 	},
 };
+use std::sync::Arc;
 use waynest::{NewId, ObjectId};
 use waynest_protocols::server::{
 	core::wayland::{
@@ -236,7 +237,11 @@ impl WlRegistry for Registry {
 						version: new_id.version,
 					},
 				)?;
-				let _ = client.display()?.output.set(output.clone());
+				client
+					.display()?
+					.outputs
+					.lock()
+					.push(Arc::downgrade(&output));
 				output.advertise_outputs(client).await?;
 			}
 			RegistryGlobals::DMABUF => {

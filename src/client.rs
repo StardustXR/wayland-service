@@ -133,6 +133,16 @@ impl Client {
 		self.get::<T>(id)
 			.is_some_and(|o| std::ptr::eq(Arc::as_ptr(&o), obj))
 	}
+	/// drops whatever the client no longer holds and hands back the rest
+	pub fn live<T: waynest_server::RequestDispatcher>(
+		&self,
+		list: &parking_lot::Mutex<Vec<std::sync::Weak<T>>>,
+		id: impl Fn(&T) -> ObjectId,
+	) -> Vec<Arc<T>> {
+		let mut list = list.lock();
+		list.retain(|d| d.upgrade().is_some_and(|d| self.holds(id(&d), &*d)));
+		list.iter().filter_map(std::sync::Weak::upgrade).collect()
+	}
 	pub fn next_event_serial(&mut self) -> u32 {
 		let prev = self.next_event_serial;
 		self.next_event_serial = self.next_event_serial.wrapping_add(1);

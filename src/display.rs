@@ -7,14 +7,14 @@ use crate::{
 		callback::{Callback, WlCallback},
 		data_device,
 		output::Output,
-		seat::Seat,
+		seat::{Devices, Seat},
 	},
 	registry::Registry,
 	util::CounterU32,
 };
 use parking_lot::Mutex;
 use std::{
-	sync::{Arc, OnceLock},
+	sync::{Arc, OnceLock, Weak},
 	time::Instant,
 };
 use waynest::ObjectId;
@@ -30,7 +30,8 @@ pub struct Display {
 	pub message_sink: MessageSink,
 	pub pid: Option<i32>,
 	pub seat: OnceLock<Arc<Seat>>,
-	pub output: OnceLock<Arc<Output>>,
+	pub devices: Devices,
+	pub outputs: Mutex<Vec<Weak<Output>>>,
 	pub data_device: Mutex<Option<ObjectId>>,
 	id_counter: CounterU32,
 	pub creation_time: Instant,
@@ -41,11 +42,15 @@ impl Display {
 			message_sink,
 			pid,
 			seat: OnceLock::new(),
-			output: OnceLock::new(),
+			devices: Devices::default(),
+			outputs: Mutex::new(Vec::new()),
 			data_device: Mutex::new(None),
 			id_counter: CounterU32::new(SERVER_ID_START),
 			creation_time: Instant::now(),
 		}
+	}
+	pub fn outputs(&self, client: &crate::client::Client) -> Vec<Arc<Output>> {
+		client.live(&self.outputs, |o| o.id)
 	}
 	pub fn next_server_id(&self) -> ObjectId {
 		unsafe { ObjectId::from_raw(self.id_counter.get()) }

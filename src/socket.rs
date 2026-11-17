@@ -240,9 +240,8 @@ impl WaylandClient {
 				toplevel.reconfigure(client).await?;
 			}
 			Message::Seat(seat_message) => {
-				if let Some(seat) = client.display()?.seat.get() {
-					seat.handle_message(client, seat_message).await?;
-				}
+				let display = client.display()?;
+				display.devices.handle_message(client, seat_message).await?;
 			}
 			Message::SendPresentationFeedback {
 				surface,

@@ -447,8 +447,8 @@ impl Surface {
 			.drain(..)
 			.collect::<Vec<_>>();
 		for feedback in feedbacks {
-			if let Some(display_id) = client.display()?.output.get().map(|display| display.id) {
-				feedback.sync_output(client, feedback.0, display_id).await?;
+			if let Some(output) = client.display()?.outputs(client).first() {
+				feedback.sync_output(client, feedback.0, output.id).await?;
 			}
 			let cycle_lo = refresh_cycle as u32;
 			let cycle_hi = (refresh_cycle >> 32) as u32;

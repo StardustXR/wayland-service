@@ -7,10 +7,10 @@ use crate::protocols::core::{
 	touch::Touch,
 };
 use mint::Vector2;
+use parking_lot::Mutex;
 use stardust_xr_fusion::keymap::Keymap;
 use stardust_xr_panels::panel_item::{ModifierState, ScrollSource};
-use std::sync::Arc;
-use std::sync::OnceLock;
+use std::sync::{Arc, Weak};
 use waynest::ObjectId;
 pub use waynest_protocols::server::core::wayland::wl_seat::*;
 use waynest_server::Client as _;
@@ -74,30 +74,39 @@ pub enum SeatMessage {
 #[waynest(error = crate::error::WaylandError, connection = crate::client::Client)]
 pub struct Seat {
 	version: u32,
-	pointer: OnceLock<Arc<Pointer>>,
-	keyboard: OnceLock<Arc<Keyboard>>,
-	touch: OnceLock<Arc<Touch>>,
 }
-
 impl Seat {
 	pub async fn new(client: &mut Client, id: ObjectId, version: u32) -> WaylandResult<Self> {
-		let seat = Self {
-			version,
-			pointer: OnceLock::new(),
-			keyboard: OnceLock::new(),
-			touch: OnceLock::new(),
-		};
+		let seat = Self { version };
 
 		if version >= 2 {
 			seat.name(client, id, "theonlyseat".into()).await?;
 		}
 
-		tracing::debug!("Advertising seat capabilities with id {}", id);
 		let capabilities = Capability::Pointer | Capability::Keyboard | Capability::Touch;
 		WlSeat::capabilities(&seat, client, id, capabilities).await?;
-		tracing::debug!("Capabilities advertised: {:?}", capabilities);
 
 		Ok(seat)
+	}
+}
+
+/// every pointer, keyboard and touch a client made, from any of its wl_seats,
+/// each one gets the input since each tracks its own focus
+#[derive(Default)]
+pub struct Devices {
+	pointers: Mutex<Vec<Weak<Pointer>>>,
+	keyboards: Mutex<Vec<Weak<Keyboard>>>,
+	touches: Mutex<Vec<Weak<Touch>>>,
+}
+impl Devices {
+	fn pointers(&self, client: &Client) -> Vec<Arc<Pointer>> {
+		client.live(&self.pointers, |p| p.id)
+	}
+	fn keyboards(&self, client: &Client) -> Vec<Arc<Keyboard>> {
+		client.live(&self.keyboards, |k| k.id)
+	}
+	fn touches(&self, client: &Client) -> Vec<Arc<Touch>> {
+		client.live(&self.touches, |t| t.id)
 	}
 
 	pub async fn handle_message(
@@ -111,14 +120,14 @@ impl Seat {
 				position,
 				delta,
 			} => {
-				if let Some(pointer) = self.live_pointer(client) {
+				for pointer in self.pointers(client) {
 					if let Some(delta) = delta {
 						pointer
 							.handle_relative_pointer_motion(client, delta)
 							.await?;
 					}
 					pointer
-						.handle_absolute_pointer_motion(client, surface, position)
+						.handle_absolute_pointer_motion(client, surface.clone(), position)
 						.await?;
 				}
 			}
@@ -130,9 +139,9 @@ impl Seat {
 				if pressed {
 					self.click_focus(client, &surface).await?;
 				}
-				if let Some(pointer) = self.live_pointer(client) {
+				for pointer in self.pointers(client) {
 					pointer
-						.handle_pointer_button(client, surface, button, pressed)
+						.handle_pointer_button(client, surface.clone(), button, pressed)
 						.await?;
 				}
 			}
@@ -141,9 +150,9 @@ impl Seat {
 				delta,
 				source,
 			} => {
-				if let Some(pointer) = self.live_pointer(client) {
+				for pointer in self.pointers(client) {
 					pointer
-						.handle_pointer_scroll_discrete(client, surface, delta, source)
+						.handle_pointer_scroll_discrete(client, surface.clone(), delta, source)
 						.await?;
 				}
 			}
@@ -152,15 +161,17 @@ impl Seat {
 				delta,
 				source,
 			} => {
-				if let Some(pointer) = self.live_pointer(client) {
+				for pointer in self.pointers(client) {
 					pointer
-						.handle_pointer_scroll_pixels(client, surface, delta, source)
+						.handle_pointer_scroll_pixels(client, surface.clone(), delta, source)
 						.await?;
 				}
 			}
 			SeatMessage::PointerScrollStop { surface } => {
-				if let Some(pointer) = self.live_pointer(client) {
-					pointer.handle_pointer_scroll_stop(client, surface).await?;
+				for pointer in self.pointers(client) {
+					pointer
+						.handle_pointer_scroll_stop(client, surface.clone())
+						.await?;
 				}
 			}
 			SeatMessage::KeyboardKey {
@@ -170,9 +181,16 @@ impl Seat {
 				pressed,
 				modifier_state,
 			} => {
-				if let Some(keyboard) = self.live_keyboard(client) {
+				for keyboard in self.keyboards(client) {
 					keyboard
-						.handle_keyboard_key(client, surface, keymap, key, pressed, modifier_state)
+						.handle_keyboard_key(
+							client,
+							surface.clone(),
+							keymap.clone(),
+							key,
+							pressed,
+							modifier_state,
+						)
 						.await?;
 				}
 			}
@@ -182,39 +200,39 @@ impl Seat {
 				position,
 			} => {
 				self.click_focus(client, &surface).await?;
-				if let Some(touch) = self.live_touch(client) {
+				for touch in self.touches(client) {
 					touch
-						.handle_touch_down(client, surface, id, position)
+						.handle_touch_down(client, surface.clone(), id, position)
 						.await?;
 				}
 			}
 			SeatMessage::TouchMove { id, position } => {
-				if let Some(touch) = self.live_touch(client) {
+				for touch in self.touches(client) {
 					touch.handle_touch_move(client, id, position).await?;
 				}
 			}
 			SeatMessage::TouchUp { id } => {
-				if let Some(touch) = self.live_touch(client) {
+				for touch in self.touches(client) {
 					touch.handle_touch_up(client, id).await?;
 				}
 			}
 			SeatMessage::KeyboardFocus { surface, focused } => {
-				if let Some(keyboard) = self.live_keyboard(client) {
+				for keyboard in self.keyboards(client) {
 					if focused {
-						keyboard.focus_toplevel(client, surface).await?;
+						keyboard.focus_toplevel(client, surface.clone()).await?;
 					} else {
 						keyboard.unfocus_toplevel(client, &surface).await?;
 					}
 				}
 			}
 			SeatMessage::Reset { surface } => {
-				if let Some(pointer) = self.live_pointer(client) {
+				for pointer in self.pointers(client) {
 					pointer.reset(client, &surface).await?;
 				}
-				if let Some(keyboard) = self.live_keyboard(client) {
+				for keyboard in self.keyboards(client) {
 					keyboard.reset(client, &surface).await?;
 				}
-				if let Some(touch) = self.live_touch(client) {
+				for touch in self.touches(client) {
 					touch.reset(client, &surface).await?;
 				}
 			}
@@ -224,29 +242,16 @@ impl Seat {
 
 	/// subsurfaces are part of their parent, focus goes to the popup or toplevel they belong to
 	async fn click_focus(&self, client: &mut Client, surface: &Arc<Surface>) -> WaylandResult<()> {
-		let Some(keyboard) = self.live_keyboard(client) else {
-			return Ok(());
-		};
 		let mut target = surface.clone();
 		while target.plays(SurfaceRole::Subsurface)
 			&& let Some(parent) = target.parent()
 		{
 			target = parent;
 		}
-		keyboard.focus(client, target).await
-	}
-	fn live_pointer(&self, client: &Client) -> Option<&Arc<Pointer>> {
-		self.pointer.get().filter(|p| client.holds(p.id, &***p))
-	}
-	fn live_keyboard(&self, client: &Client) -> Option<&Arc<Keyboard>> {
-		self.keyboard.get().filter(|k| client.holds(k.id, &***k))
-	}
-	fn live_touch(&self, client: &Client) -> Option<&Arc<Touch>> {
-		self.touch.get().filter(|t| client.holds(t.id, &***t))
-	}
-
-	pub async fn cursor_surface(&self) -> Option<Arc<Surface>> {
-		self.pointer.get()?.cursor_surface().await
+		for keyboard in self.keyboards(client) {
+			keyboard.focus(client, target.clone()).await?;
+		}
+		Ok(())
 	}
 }
 impl WlSeat for Seat {
@@ -260,7 +265,12 @@ impl WlSeat for Seat {
 		id: ObjectId,
 	) -> WaylandResult<()> {
 		let pointer = client.insert(id, Pointer::new(id, self.version))?;
-		let _ = self.pointer.set(pointer);
+		client
+			.display()?
+			.devices
+			.pointers
+			.lock()
+			.push(Arc::downgrade(&pointer));
 		Ok(())
 	}
 
@@ -271,13 +281,17 @@ impl WlSeat for Seat {
 		_sender_id: ObjectId,
 		id: ObjectId,
 	) -> WaylandResult<()> {
-		tracing::info!("Getting keyboard");
 		let keyboard = client.insert(id, Keyboard::new(id))?;
 		// stardust doesn't repeat keys itself, so clients have to
 		if self.version >= 4 {
 			keyboard.repeat_info(client, id, 25, 600).await?;
 		}
-		let _ = self.keyboard.set(keyboard);
+		client
+			.display()?
+			.devices
+			.keyboards
+			.lock()
+			.push(Arc::downgrade(&keyboard));
 		Ok(())
 	}
 
@@ -289,7 +303,12 @@ impl WlSeat for Seat {
 		id: ObjectId,
 	) -> WaylandResult<()> {
 		let touch = client.insert(id, Touch::new(id))?;
-		let _ = self.touch.set(touch);
+		client
+			.display()?
+			.devices
+			.touches
+			.lock()
+			.push(Arc::downgrade(&touch));
 		Ok(())
 	}
 
