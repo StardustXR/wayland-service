@@ -62,6 +62,12 @@ impl Surface {
 		}
 	}
 
+	fn popup(&self) -> Weak<Popup> {
+		match &*self.role_object.lock() {
+			RoleObject::Popup(p) => p.clone(),
+			_ => Weak::new(),
+		}
+	}
 	fn has_role_object(&self) -> bool {
 		match &*self.role_object.lock() {
 			RoleObject::Toplevel(t) => t.strong_count() > 0,
@@ -258,8 +264,16 @@ impl XdgSurface for Surface {
 		let surface = client.try_get::<Surface>(self.id)?;
 		let popup = client.insert(
 			popup_id,
-			Popup::new(self.version, surface, parent_id, positioner, popup_id),
+			Popup::new(
+				self.version,
+				surface,
+				parent_id,
+				parent.popup(),
+				positioner,
+				popup_id,
+			),
 		)?;
+		Popup::register(&popup);
 
 		let popup_weak = Arc::downgrade(&popup);
 		*self.role_object.lock() = RoleObject::Popup(popup_weak.clone());

@@ -2,12 +2,18 @@ use super::{
 	positioner::{Positioner, PositionerData},
 	surface::Surface,
 };
-use crate::{client::Client, error::WaylandResult};
+use crate::{
+	client::{Client, Message},
+	error::WaylandResult,
+};
 use mint::Vector2;
 use parking_lot::Mutex;
 use rand::random;
 use stardust_xr_panels::panel_item::{ChildState, Rect, SurfaceId, SurfaceUpdateTarget};
-use std::sync::Arc;
+use std::sync::{
+	Arc, Weak,
+	atomic::{AtomicBool, Ordering},
+};
 use waynest::ObjectId;
 use waynest_protocols::server::stable::xdg_shell::xdg_popup::XdgPopup;
 use waynest_server::Client as _;
@@ -21,7 +27,12 @@ enum Lifecycle {
 	AwaitingAck,
 	Configured,
 	Mapped,
+	/// popup_done was sent, the client is expected to destroy it and it never maps again
+	Dismissed,
 }
+
+/// every live popup oldest first, walked backwards so nested popups get dismissed topmost first
+static POPUPS: Mutex<Vec<Weak<Popup>>> = Mutex::new(Vec::new());
 
 /// whether the commit handler has to send the initial configure
 pub enum Commit {
@@ -37,6 +48,8 @@ pub struct Popup {
 	parent: Option<SurfaceId>,
 	positioner_data: Mutex<PositionerData>,
 	lifecycle: Mutex<Lifecycle>,
+	grabbed: AtomicBool,
+	parent_popup: Weak<Popup>,
 	id: ObjectId,
 }
 impl Popup {
@@ -44,6 +57,7 @@ impl Popup {
 		version: u32,
 		surface: Arc<Surface>,
 		parent: Option<SurfaceId>,
+		parent_popup: Weak<Popup>,
 		positioner_data: PositionerData,
 		id: ObjectId,
 	) -> Self {
@@ -58,8 +72,61 @@ impl Popup {
 			parent,
 			positioner_data: Mutex::new(positioner_data),
 			lifecycle: Mutex::new(Lifecycle::AwaitingInitialCommit),
+			grabbed: AtomicBool::new(false),
+			parent_popup,
 			id,
 		}
+	}
+
+	pub fn register(popup: &Arc<Popup>) {
+		POPUPS.lock().push(Arc::downgrade(popup));
+	}
+	fn dismiss_where(f: impl Fn(&Popup) -> bool) {
+		let popups = {
+			let mut popups = POPUPS.lock();
+			popups.retain(|p| p.strong_count() > 0);
+			popups
+				.iter()
+				.rev()
+				.filter_map(Weak::upgrade)
+				.collect::<Vec<_>>()
+		};
+		for popup in popups.into_iter().filter(|p| f(p)) {
+			let sink = &popup.surface.wl_surface.message_sink;
+			let _ = sink.send(Message::DismissPopup(popup.clone()));
+		}
+	}
+	/// presses on the grabbing client's own surfaces are its to handle, anywhere else ends the grab
+	pub fn dismiss_grabs_outside(surface: &crate::protocols::core::surface::Surface) {
+		Self::dismiss_where(|p| {
+			p.grabbed.load(Ordering::Relaxed)
+				&& !p
+					.surface
+					.wl_surface
+					.message_sink
+					.same_channel(&surface.message_sink)
+		});
+	}
+	pub fn dismiss_popups_of(toplevel_surface: &crate::protocols::core::surface::Surface) {
+		Self::dismiss_where(|p| p.surface.wl_surface.same_toplevel(toplevel_surface));
+	}
+	fn is_dismissed(&self) -> bool {
+		matches!(*self.lifecycle.lock(), Lifecycle::Dismissed)
+	}
+	pub async fn dismiss(&self, client: &mut Client) -> WaylandResult<()> {
+		{
+			let mut lifecycle = self.lifecycle.lock();
+			match *lifecycle {
+				Lifecycle::Dismissed => return Ok(()),
+				Lifecycle::Mapped => self.remove_child(),
+				_ => {}
+			}
+			*lifecycle = Lifecycle::Dismissed;
+		}
+		if client.holds(self.id, self) {
+			self.popup_done(client, self.id).await?;
+		}
+		Ok(())
 	}
 
 	pub fn commit(&self, has_buffer: bool) -> Commit {
@@ -128,8 +195,10 @@ impl Popup {
 
 	pub async fn send_configure(&self, client: &mut Client) -> WaylandResult<()> {
 		if !client.holds(self.id, self)
-			|| matches!(*self.lifecycle.lock(), Lifecycle::AwaitingInitialCommit)
-		{
+			|| matches!(
+				*self.lifecycle.lock(),
+				Lifecycle::AwaitingInitialCommit | Lifecycle::Dismissed
+			) {
 			return Ok(());
 		}
 		let geometry = self.positioner_data.lock().infinite_geometry();
@@ -151,11 +220,19 @@ impl XdgPopup for Popup {
 	/// https://wayland.app/protocols/xdg-shell#xdg_popup:request:grab
 	async fn grab(
 		&self,
-		_client: &mut Self::Connection,
+		client: &mut Self::Connection,
 		_sender_id: ObjectId,
 		_seat: ObjectId,
 		_serial: u32,
 	) -> WaylandResult<()> {
+		self.grabbed.store(true, Ordering::Relaxed);
+		if self
+			.parent_popup
+			.upgrade()
+			.is_some_and(|p| p.is_dismissed())
+		{
+			return self.dismiss(client).await;
+		}
 		Ok(())
 	}
 
@@ -173,7 +250,10 @@ impl XdgPopup for Popup {
 		*self.positioner_data.lock() = positioner_data;
 
 		// before the initial commit the first configure will carry the new position anyway
-		if matches!(*self.lifecycle.lock(), Lifecycle::AwaitingInitialCommit) {
+		if matches!(
+			*self.lifecycle.lock(),
+			Lifecycle::AwaitingInitialCommit | Lifecycle::Dismissed
+		) {
 			return Ok(());
 		}
 		if self.version >= 3 {

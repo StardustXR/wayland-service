@@ -38,6 +38,7 @@ pub enum Message {
 	},
 	ReconfigureToplevel(Arc<Toplevel>),
 	ConfigurePopup(Arc<Popup>),
+	DismissPopup(Arc<Popup>),
 	SetToplevelVisualActive {
 		toplevel: Arc<Toplevel>,
 		active: bool,

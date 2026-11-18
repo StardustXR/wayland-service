@@ -103,6 +103,7 @@ impl Toplevel {
 				let unmapped = std::mem::replace(&mut *lifecycle, Lifecycle::AwaitingInitialCommit);
 				drop(lifecycle);
 				drop(unmapped);
+				super::popup::Popup::dismiss_popups_of(self.wl_surface());
 				// unmapping puts the toplevel back to how it was right after get_toplevel
 				*self.data.lock() = ToplevelData::default();
 				let mut state = self.wl_surface().state_lock();
@@ -151,6 +152,7 @@ impl Toplevel {
 			Lifecycle::AwaitingInitialCommit,
 		);
 		drop(unmapped);
+		super::popup::Popup::dismiss_popups_of(self.wl_surface());
 	}
 
 	/// with `replacing`, only swaps if that's still the current panel item,

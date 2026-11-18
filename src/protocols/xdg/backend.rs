@@ -1,4 +1,4 @@
-use super::toplevel::Toplevel;
+use super::{popup::Popup, toplevel::Toplevel};
 use crate::{
 	client::Message,
 	panel_item_ui::PanelItemUi,
@@ -284,6 +284,9 @@ impl PanelItemHandler for XdgBackend {
 		timestamp: Option<Timestamp>,
 	) {
 		if let Some(surface) = self.surface_from_id(&surface) {
+			if pressed {
+				Popup::dismiss_grabs_outside(&surface);
+			}
 			let Some(toplevel) = self.toplevel() else {
 				return;
 			};
@@ -412,6 +415,7 @@ impl PanelItemHandler for XdgBackend {
 			position.y
 		);
 		if let Some(surface) = self.surface_from_id(&surface) {
+			Popup::dismiss_grabs_outside(&surface);
 			let Some(toplevel) = self.toplevel() else {
 				return;
 			};
