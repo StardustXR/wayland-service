@@ -1,10 +1,13 @@
 use crate::client::Client;
 use crate::error::WaylandResult;
-use crate::protocols::core::{
-	keyboard::{Keyboard, WlKeyboard as _},
-	pointer::Pointer,
-	surface::{Surface, SurfaceRole},
-	touch::Touch,
+use crate::protocols::{
+	core::{
+		keyboard::{Keyboard, WlKeyboard as _},
+		pointer::Pointer,
+		surface::{Surface, SurfaceRole},
+		touch::Touch,
+	},
+	xdg::popup::Popup,
 };
 use mint::Vector2;
 use parking_lot::Mutex;
@@ -202,6 +205,7 @@ impl Devices {
 				modifier_state,
 				time,
 			} => {
+				let surface = grab_target(surface);
 				for keyboard in self.keyboards(client) {
 					keyboard
 						.handle_keyboard_key(
@@ -242,7 +246,9 @@ impl Devices {
 			SeatMessage::KeyboardFocus { surface, focused } => {
 				for keyboard in self.keyboards(client) {
 					if focused {
-						keyboard.focus_toplevel(client, surface.clone()).await?;
+						keyboard
+							.focus_toplevel(client, grab_target(surface.clone()))
+							.await?;
 					} else {
 						keyboard.unfocus_toplevel(client, &surface).await?;
 					}
@@ -271,11 +277,29 @@ impl Devices {
 		{
 			target = parent;
 		}
+		let target = grab_target(target);
 		for keyboard in self.keyboards(client) {
 			keyboard.focus(client, target.clone()).await?;
 		}
 		Ok(())
 	}
+
+	/// for grabs starting or ending, only matters if the toplevel had focus to begin with
+	pub async fn refocus_within(
+		&self,
+		client: &mut Client,
+		surface: Arc<Surface>,
+	) -> WaylandResult<()> {
+		for keyboard in self.keyboards(client) {
+			keyboard.focus_within(client, surface.clone()).await?;
+		}
+		Ok(())
+	}
+}
+
+/// the topmost grabbing popup keeps keyboard focus over the rest of its toplevel
+fn grab_target(surface: Arc<Surface>) -> Arc<Surface> {
+	Popup::topmost_grab(&surface).unwrap_or(surface)
 }
 impl WlSeat for Seat {
 	type Connection = crate::client::Client;

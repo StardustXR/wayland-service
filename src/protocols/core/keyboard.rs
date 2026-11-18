@@ -200,6 +200,18 @@ impl Keyboard {
 		self.focus(client, toplevel_surface).await
 	}
 
+	/// moves focus around inside a toplevel without taking it from another one
+	pub async fn focus_within(
+		&self,
+		client: &mut Client,
+		surface: Arc<Surface>,
+	) -> WaylandResult<()> {
+		if !self.state.lock().await.is_focused_within(&surface) {
+			return Ok(());
+		}
+		self.focus(client, surface).await
+	}
+
 	pub async fn unfocus_toplevel(
 		&self,
 		client: &mut Client,

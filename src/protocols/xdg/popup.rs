@@ -110,6 +110,21 @@ impl Popup {
 	pub fn dismiss_popups_of(toplevel_surface: &crate::protocols::core::surface::Surface) {
 		Self::dismiss_where(|p| p.surface.wl_surface.same_toplevel(toplevel_surface));
 	}
+	pub fn topmost_grab(
+		surface: &crate::protocols::core::surface::Surface,
+	) -> Option<Arc<crate::protocols::core::surface::Surface>> {
+		POPUPS
+			.lock()
+			.iter()
+			.rev()
+			.filter_map(Weak::upgrade)
+			.find(|p| {
+				p.grabbed.load(Ordering::Relaxed)
+					&& !p.is_dismissed()
+					&& p.surface.wl_surface.same_toplevel(surface)
+			})
+			.map(|p| p.surface.wl_surface.clone())
+	}
 	fn is_dismissed(&self) -> bool {
 		matches!(*self.lifecycle.lock(), Lifecycle::Dismissed)
 	}
@@ -233,7 +248,11 @@ impl XdgPopup for Popup {
 		{
 			return self.dismiss(client).await;
 		}
-		Ok(())
+		let display = client.display()?;
+		display
+			.devices
+			.refocus_within(client, self.surface.wl_surface.clone())
+			.await
 	}
 
 	/// https://wayland.app/protocols/xdg-shell#xdg_popup:request:reposition
@@ -279,9 +298,21 @@ impl XdgPopup for Popup {
 		_sender_id: ObjectId,
 	) -> WaylandResult<()> {
 		client.remove(self.id);
+		let grabbed = self.grabbed.swap(false, Ordering::Relaxed);
 		self.unmap();
-		self.surface.wl_surface.retire_role();
-		Ok(())
+		let wl_surface = &self.surface.wl_surface;
+		wl_surface.retire_role();
+		if !grabbed {
+			return Ok(());
+		}
+		// the grab goes back to the parent popup if it had one, otherwise the toplevel
+		let Some(target) = Self::topmost_grab(wl_surface)
+			.or_else(|| Some(wl_surface.toplevel.read().upgrade()?.wl_surface().clone()))
+		else {
+			return Ok(());
+		};
+		let display = client.display()?;
+		display.devices.refocus_within(client, target).await
 	}
 }
 impl Drop for Popup {
