@@ -1,6 +1,10 @@
-use crate::{client::Client, error::WaylandResult, protocols::core::surface::Surface};
+use crate::{
+	client::Client,
+	error::{WaylandError, WaylandResult},
+	protocols::core::surface::Surface,
+};
 
-use super::backend::XdgBackend;
+use super::{backend::XdgBackend, decoration::XdgDecoration};
 use gluon_ipc::Node;
 use mint::Vector2;
 use parking_lot::Mutex;
@@ -11,6 +15,7 @@ use std::sync::{
 };
 use waynest::ObjectId;
 pub use waynest_protocols::server::stable::xdg_shell::xdg_toplevel::*;
+use waynest_protocols::server::unstable::xdg_decoration_unstable_v1::zxdg_toplevel_decoration_v1::Error as DecorationError;
 use waynest_server::Client as _;
 
 /// the xdg_surface dance a toplevel does before stardust ever sees it,
@@ -69,6 +74,7 @@ pub struct Toplevel {
 	lifecycle: Mutex<Lifecycle>,
 	mappings: AtomicU64,
 	data: Mutex<ToplevelData>,
+	pub(super) decoration: Mutex<Weak<XdgDecoration>>,
 }
 impl Toplevel {
 	pub fn new(
@@ -84,6 +90,7 @@ impl Toplevel {
 			lifecycle: Mutex::new(Lifecycle::AwaitingInitialCommit),
 			mappings: AtomicU64::new(0),
 			data: Mutex::new(ToplevelData::default()),
+			decoration: Mutex::new(Weak::new()),
 		}
 	}
 
@@ -273,6 +280,12 @@ impl Toplevel {
 				.collect(),
 		)
 		.await?;
+		let decoration = self.decoration.lock().upgrade();
+		if let Some(d) = decoration
+			&& client.holds(d.id, &*d)
+		{
+			d.send_mode(client).await?;
+		}
 		self.xdg_surface.reconfigure(client).await?;
 		Ok(())
 	}
@@ -478,6 +491,16 @@ impl XdgToplevel for Toplevel {
 		client: &mut Self::Connection,
 		_sender_id: ObjectId,
 	) -> WaylandResult<()> {
+		let decoration = self.decoration.lock().upgrade();
+		if let Some(d) = decoration
+			&& client.holds(d.id, &*d)
+		{
+			return Err(WaylandError::Fatal {
+				object_id: d.id,
+				code: DecorationError::Orphaned as u32,
+				message: "xdg_toplevel destroyed before its decoration",
+			});
+		}
 		client.remove(self.id);
 		self.unmap();
 		self.wl_surface().retire_role();

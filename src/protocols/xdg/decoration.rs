@@ -1,4 +1,9 @@
-use crate::{client::Client, error::WaylandResult};
+use super::toplevel::Toplevel;
+use crate::{
+	client::Client,
+	error::{WaylandError, WaylandResult},
+};
+use std::sync::{Arc, Weak};
 use waynest::ObjectId;
 use waynest_protocols::server::unstable::xdg_decoration_unstable_v1::{
 	zxdg_decoration_manager_v1::*, zxdg_toplevel_decoration_v1::*,
@@ -28,17 +33,48 @@ impl ZxdgDecorationManagerV1 for XdgDecorationManager {
 		client: &mut Self::Connection,
 		_sender_id: ObjectId,
 		id: ObjectId,
-		_toplevel: ObjectId,
+		toplevel: ObjectId,
 	) -> WaylandResult<()> {
-		client.insert(id, XdgDecoration { id })?;
+		let toplevel = client.try_get::<Toplevel>(toplevel)?;
+		let existing = toplevel.decoration.lock().upgrade();
+		if existing.is_some_and(|d| client.holds(d.id, &*d)) {
+			return Err(WaylandError::Fatal {
+				object_id: self.id,
+				code: Error::AlreadyConstructed as u32,
+				message: "xdg_toplevel already has a decoration",
+			});
+		}
+		let decoration = client.insert(
+			id,
+			XdgDecoration {
+				id,
+				toplevel: Arc::downgrade(&toplevel),
+			},
+		)?;
+		*toplevel.decoration.lock() = Arc::downgrade(&decoration);
 		Ok(())
 	}
 }
 
+/// the panel shell always draws the frame, so whatever the client asks for it gets server side
 #[derive(Debug, waynest_server::RequestDispatcher)]
 #[waynest(error = crate::error::WaylandError, connection = crate::client::Client)]
 pub struct XdgDecoration {
-	id: ObjectId,
+	pub id: ObjectId,
+	toplevel: Weak<Toplevel>,
+}
+impl XdgDecoration {
+	pub async fn send_mode(&self, client: &mut Client) -> WaylandResult<()> {
+		self.configure(client, self.id, Mode::ServerSide).await
+	}
+
+	/// the mode only counts once it comes with an xdg_surface.configure, which waits for the initial commit
+	async fn reconfigure(&self, client: &mut Client) -> WaylandResult<()> {
+		match self.toplevel.upgrade() {
+			Some(t) => t.reconfigure(client).await,
+			None => Ok(()),
+		}
+	}
 }
 impl ZxdgToplevelDecorationV1 for XdgDecoration {
 	type Connection = Client;
@@ -58,8 +94,7 @@ impl ZxdgToplevelDecorationV1 for XdgDecoration {
 		_sender_id: ObjectId,
 		_mode: Mode,
 	) -> WaylandResult<()> {
-		// TODO: proper robust implementation where configure must be sent before first buffer attach
-		self.configure(client, self.id, Mode::ServerSide).await
+		self.reconfigure(client).await
 	}
 
 	async fn unset_mode(
@@ -67,7 +102,6 @@ impl ZxdgToplevelDecorationV1 for XdgDecoration {
 		client: &mut Self::Connection,
 		_sender_id: ObjectId,
 	) -> WaylandResult<()> {
-		// TODO: proper robust implementation where configure must be sent before first buffer attach
-		self.configure(client, self.id, Mode::ServerSide).await
+		self.reconfigure(client).await
 	}
 }
