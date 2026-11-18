@@ -176,7 +176,7 @@ impl XdgPopup for Popup {
 		if matches!(*self.lifecycle.lock(), Lifecycle::AwaitingInitialCommit) {
 			return Ok(());
 		}
-		if self.version >= 5 {
+		if self.version >= 3 {
 			self.repositioned(client, sender_id, token).await?;
 		}
 		self.send_configure(client).await?;
