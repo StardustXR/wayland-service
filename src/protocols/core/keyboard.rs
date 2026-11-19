@@ -13,7 +13,7 @@ use crate::{
 	KEYMAP_STORE,
 	client::Client,
 	error::WaylandResult,
-	protocols::core::{data_device, surface::Surface},
+	protocols::{core::surface::Surface, selection},
 	util::{WaylandTime as _, now},
 };
 
@@ -146,7 +146,7 @@ impl Keyboard {
 				carried
 			}
 			_ => {
-				data_device::offer_current(client).await?;
+				selection::offer_current(client).await?;
 				Vec::new()
 			}
 		};

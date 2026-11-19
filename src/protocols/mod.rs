@@ -2,6 +2,8 @@ pub mod core;
 pub mod dmabuf;
 pub mod mesa_drm;
 pub mod presentation;
+pub mod primary_selection;
 pub mod relative_pointer;
+pub mod selection;
 pub mod viewporter;
 pub mod xdg;

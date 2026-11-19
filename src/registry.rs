@@ -13,6 +13,7 @@ use crate::{
 		dmabuf::Dmabuf,
 		mesa_drm::MesaDrm,
 		presentation::Presentation,
+		primary_selection::PrimarySelectionManager,
 		relative_pointer::RelativePointerManager,
 		viewporter::Viewporter,
 		xdg::{
@@ -36,6 +37,7 @@ use waynest_protocols::server::{
 	},
 	unstable::{
 		relative_pointer_unstable_v1::zwp_relative_pointer_manager_v1::ZwpRelativePointerManagerV1,
+		// wp_primary_selection_unstable_v1::zwp_primary_selection_device_manager_v1::ZwpPrimarySelectionDeviceManagerV1,
 		xdg_decoration_unstable_v1::zxdg_decoration_manager_v1::ZxdgDecorationManagerV1,
 	},
 };
@@ -56,6 +58,7 @@ impl RegistryGlobals {
 	pub const RELATIVE_POINTER: u32 = 10;
 	pub const SUBCOMPOSITOR: u32 = 11;
 	pub const XDG_DECORATION: u32 = 12;
+	pub const PRIMARY_SELECTION: u32 = 13;
 }
 
 #[derive(Debug, waynest_server::RequestDispatcher, Default)]
@@ -185,6 +188,16 @@ impl Registry {
 		)
 		.await?;
 
+		// middle click pasting is more annoying than useful in browsers, uncomment to offer it
+		// self.global(
+		// 	client,
+		// 	sender_id,
+		// 	RegistryGlobals::PRIMARY_SELECTION,
+		// 	PrimarySelectionManager::INTERFACE.to_string(),
+		// 	PrimarySelectionManager::VERSION,
+		// )
+		// .await?;
+
 		Ok(())
 	}
 }
@@ -293,6 +306,11 @@ impl WlRegistry for Registry {
 						id: new_id.object_id,
 					},
 				)?;
+			}
+			RegistryGlobals::PRIMARY_SELECTION => {
+				tracing::info!("Binding zwp_primary_selection_device_manager_v1");
+
+				client.insert(new_id.object_id, PrimarySelectionManager(new_id.object_id))?;
 			}
 			id => {
 				tracing::error!(id, "Wayland: failed to bind to registry global");

@@ -16,14 +16,9 @@ use waynest_server::{Store, StoreError};
 use crate::{
 	error::WaylandError,
 	protocols::{
-		core::{
-			buffer::Buffer,
-			callback::Callback,
-			data_device::{ClipboardSelection, DataSource},
-			seat::SeatMessage,
-			surface::Surface,
-		},
+		core::{buffer::Buffer, callback::Callback, seat::SeatMessage, surface::Surface},
 		presentation::MonotonicTimestamp,
+		selection::{Kind, Selection, Source},
 		xdg::{popup::Popup, toplevel::Toplevel},
 	},
 };
@@ -55,17 +50,13 @@ pub enum Message {
 		display_timestamp: MonotonicTimestamp,
 		refresh_cycle: u64,
 	},
-	// TODO: this whole clipboard implementation is the bare minimum to get copy/paste
-	// working across clients. It's missing drag-and-drop (wl_data_device.start_drag
-	// cancels immediately) and any kind of `dnd_action`/`finish` negotiation. See
-	// protocols/core/data_device.rs.
-	ClipboardSelection(Option<ClipboardSelection>),
-	ClipboardSend {
-		source: Arc<DataSource>,
+	Selection(Kind, Option<Selection>),
+	SelectionSend {
+		source: Source,
 		mime_type: String,
 		fd: OwnedFd,
 	},
-	ClipboardCancel(Arc<DataSource>),
+	SelectionCancel(Source),
 }
 
 static SERIALS: AtomicU32 = AtomicU32::new(1);

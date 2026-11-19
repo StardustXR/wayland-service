@@ -3,11 +3,15 @@
 use crate::{
 	client::MessageSink,
 	error::WaylandResult,
-	protocols::core::{
-		callback::{Callback, WlCallback},
-		data_device::{self, DataDevice},
-		output::Output,
-		seat::{Devices, Seat},
+	protocols::{
+		core::{
+			callback::{Callback, WlCallback},
+			data_device::DataDevice,
+			output::Output,
+			seat::{Devices, Seat},
+		},
+		primary_selection::PrimaryDevice,
+		selection,
 	},
 	registry::Registry,
 	util::CounterU32,
@@ -33,6 +37,7 @@ pub struct Display {
 	pub devices: Devices,
 	pub outputs: Mutex<Vec<Weak<Output>>>,
 	pub data_devices: Mutex<Vec<Weak<DataDevice>>>,
+	pub primary_devices: Mutex<Vec<Weak<PrimaryDevice>>>,
 	id_counter: CounterU32,
 	pub creation_time: Instant,
 }
@@ -45,6 +50,7 @@ impl Display {
 			devices: Devices::default(),
 			outputs: Mutex::new(Vec::new()),
 			data_devices: Mutex::new(Vec::new()),
+			primary_devices: Mutex::new(Vec::new()),
 			id_counter: CounterU32::new(SERVER_ID_START),
 			creation_time: Instant::now(),
 		}
@@ -55,13 +61,16 @@ impl Display {
 	pub fn data_devices(&self, client: &crate::client::Client) -> Vec<Arc<DataDevice>> {
 		client.live(&self.data_devices, |d| d.id)
 	}
+	pub fn primary_devices(&self, client: &crate::client::Client) -> Vec<Arc<PrimaryDevice>> {
+		client.live(&self.primary_devices, |d| d.id)
+	}
 	pub fn next_server_id(&self) -> ObjectId {
 		unsafe { ObjectId::from_raw(self.id_counter.get()) }
 	}
 }
 impl Drop for Display {
 	fn drop(&mut self) {
-		data_device::unregister_client(&self.message_sink);
+		selection::unregister_client(&self.message_sink);
 	}
 }
 impl WlDisplay for Display {
