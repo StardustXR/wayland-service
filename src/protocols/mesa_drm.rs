@@ -10,7 +10,7 @@ use waynest_protocols::server::mesa::drm::wl_drm::*;
 use crate::{
 	CLIENT,
 	client::Client,
-	error::WaylandResult,
+	error::{WaylandError, WaylandResult},
 	protocols::{
 		core::buffer::{Buffer, BufferBacking},
 		dmabuf::buffer_backing::DmabufBacking,
@@ -68,7 +68,7 @@ impl WlDrm for MesaDrm {
 	async fn create_buffer(
 		&self,
 		_client: &mut Self::Connection,
-		_sender_id: ObjectId,
+		sender_id: ObjectId,
 		_id: ObjectId,
 		_name: u32,
 		_width: i32,
@@ -76,14 +76,13 @@ impl WlDrm for MesaDrm {
 		_stride: u32,
 		_format: u32,
 	) -> WaylandResult<()> {
-		tracing::error!("Tried to create non-prime wl_drm buffer!");
-		Ok(())
+		Err(flink_unsupported(sender_id))
 	}
 
 	async fn create_planar_buffer(
 		&self,
 		_client: &mut Self::Connection,
-		_sender_id: ObjectId,
+		sender_id: ObjectId,
 		_id: ObjectId,
 		_name: u32,
 		_width: i32,
@@ -96,14 +95,13 @@ impl WlDrm for MesaDrm {
 		_offset2: i32,
 		_stride2: i32,
 	) -> WaylandResult<()> {
-		tracing::error!("Tried to create non-prime wl_drm buffer!");
-		Ok(())
+		Err(flink_unsupported(sender_id))
 	}
 
 	async fn create_prime_buffer(
 		&self,
 		client: &mut Self::Connection,
-		_sender_id: ObjectId,
+		sender_id: ObjectId,
 		buffer_id: ObjectId,
 		name: OwnedFd,
 		width: i32,
@@ -116,12 +114,12 @@ impl WlDrm for MesaDrm {
 		_offset2: i32,
 		_stride2: i32,
 	) -> WaylandResult<()> {
-		// TODO: actual error checking
-		let Ok(fourcc) = DrmFourcc::try_from(format) else {
-			tracing::error!("Failed to convert DrmFourcc");
-			return Ok(());
-		};
-		let _ = DmabufBacking::new(
+		let fourcc = DrmFourcc::try_from(format).map_err(|_| WaylandError::Fatal {
+			object_id: sender_id,
+			code: Error::InvalidFormat as u32,
+			message: "unknown wl_drm format",
+		})?;
+		let backing = DmabufBacking::new(
 			vec![DisjointDmatexPlane {
 				dmabuf_fd: name,
 				plane: DmatexPlane {
@@ -139,9 +137,24 @@ impl WlDrm for MesaDrm {
 			fourcc,
 		)
 		.await
-		.inspect_err(|e| tracing::error!("Failed to import dmabuf because {e}"))
-		.map(|backing| Buffer::new(client, buffer_id, BufferBacking::Dmabuf(backing)));
-
+		.map_err(|e| {
+			tracing::error!("Failed to import dmabuf because {e}");
+			WaylandError::Fatal {
+				object_id: sender_id,
+				code: Error::InvalidName as u32,
+				message: "couldn't import the prime fd",
+			}
+		})?;
+		Buffer::new(client, buffer_id, BufferBacking::Dmabuf(backing))?;
 		Ok(())
+	}
+}
+
+// skipping the buffer object would only fail later when the client uses its id
+fn flink_unsupported(drm: ObjectId) -> WaylandError {
+	WaylandError::Fatal {
+		object_id: drm,
+		code: Error::InvalidName as u32,
+		message: "flink names aren't supported, only prime fds",
 	}
 }
