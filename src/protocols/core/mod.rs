@@ -2,6 +2,7 @@ pub mod buffer;
 pub mod callback;
 pub mod compositor;
 pub mod data_device;
+pub mod drag;
 pub mod keyboard;
 pub mod output;
 pub mod pointer;

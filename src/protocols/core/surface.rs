@@ -36,6 +36,7 @@ pub enum SurfaceRole {
 	Subsurface,
 	XdgToplevel,
 	XdgPopup,
+	DndIcon,
 }
 impl Display for SurfaceRole {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -44,6 +45,7 @@ impl Display for SurfaceRole {
 			SurfaceRole::Subsurface => f.write_str("SurfaceRole::Subsurface"),
 			SurfaceRole::XdgToplevel => f.write_str("SurfaceRole::XdgToplevel"),
 			SurfaceRole::XdgPopup => f.write_str("SurfaceRole::XdgPopup"),
+			SurfaceRole::DndIcon => f.write_str("SurfaceRole::DndIcon"),
 		}
 	}
 }
@@ -75,8 +77,10 @@ impl RoleState {
 	}
 	fn assign(self, role: SurfaceRole) -> Result<Self, RoleError> {
 		match self {
-			// a cursor has no role object, so setting it again is just setting it again
-			Self::Playing(SurfaceRole::Cursor) if role == SurfaceRole::Cursor => Ok(self),
+			// cursors and drag icons have no role object, so setting them again is just setting them again
+			Self::Playing(r @ (SurfaceRole::Cursor | SurfaceRole::DndIcon)) if role == r => {
+				Ok(self)
+			}
 			Self::Playing(r) if r == role => Err(RoleError::Occupied),
 			Self::XdgSurface(prev) if role.is_xdg() && prev.is_none_or(|p| p == role) => {
 				Ok(Self::Playing(role))
@@ -605,6 +609,14 @@ impl Surface {
 			let _ = self.message_sink.send(Message::Frame(callbacks));
 		}
 	}
+	/// a drag icon's offsets move it relative to the pointer, nothing else here uses them
+	async fn offset_drag_icon(&self, client: &mut Client, d: Vector2<i32>) -> WaylandResult<()> {
+		if self.plays(SurfaceRole::DndIcon) {
+			let display = client.display()?;
+			display.devices.offset_drag_icon(self, d).await;
+		}
+		Ok(())
+	}
 	fn on_commit(&self) {
 		self.state.lock().apply();
 		let mut handlers = self.on_commit_handlers.lock();
@@ -632,9 +644,13 @@ impl WlSurface for Surface {
 		client: &mut Self::Connection,
 		_sender_id: ObjectId,
 		buffer: Option<ObjectId>,
-		_x: i32,
-		_y: i32,
+		x: i32,
+		y: i32,
 	) -> WaylandResult<()> {
+		// from v5 these have to be zero and wl_surface.offset does the job instead
+		if x != 0 || y != 0 {
+			self.offset_drag_icon(client, [x, y].into()).await?;
+		}
 		self.state.lock().pending.buffer = buffer.and_then(|b| {
 			let buffer = client.get::<Buffer>(b)?;
 			Some(buffer)
@@ -749,12 +765,12 @@ impl WlSurface for Surface {
 	#[tracing::instrument(level = "debug", skip_all)]
 	async fn offset(
 		&self,
-		_client: &mut Self::Connection,
+		client: &mut Self::Connection,
 		_sender_id: ObjectId,
-		_x: i32,
-		_y: i32,
+		x: i32,
+		y: i32,
 	) -> WaylandResult<()> {
-		Ok(())
+		self.offset_drag_icon(client, [x, y].into()).await
 	}
 
 	/// https://wayland.app/protocols/wayland#wl_surface:request:destroy

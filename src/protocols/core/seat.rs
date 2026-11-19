@@ -2,6 +2,7 @@ use crate::client::Client;
 use crate::error::WaylandResult;
 use crate::protocols::{
 	core::{
+		drag::{Drag, DragInput},
 		keyboard::{Keyboard, WlKeyboard as _},
 		pointer::Pointer,
 		surface::{Surface, SurfaceRole},
@@ -110,15 +111,16 @@ pub struct Devices {
 	pointers: Mutex<Vec<Weak<Pointer>>>,
 	keyboards: Mutex<Vec<Weak<Keyboard>>>,
 	touches: Mutex<Vec<Weak<Touch>>>,
+	pub(super) drag: tokio::sync::Mutex<Drag>,
 }
 impl Devices {
-	fn pointers(&self, client: &Client) -> Vec<Arc<Pointer>> {
+	pub(super) fn pointers(&self, client: &Client) -> Vec<Arc<Pointer>> {
 		client.live(&self.pointers, |p| p.id)
 	}
 	fn keyboards(&self, client: &Client) -> Vec<Arc<Keyboard>> {
 		client.live(&self.keyboards, |k| k.id)
 	}
-	fn touches(&self, client: &Client) -> Vec<Arc<Touch>> {
+	pub(super) fn touches(&self, client: &Client) -> Vec<Arc<Touch>> {
 		client.live(&self.touches, |t| t.id)
 	}
 
@@ -134,6 +136,18 @@ impl Devices {
 				delta,
 				time,
 			} => {
+				if self
+					.drag_motion(
+						client,
+						DragInput::Pointer,
+						Some(surface.clone()),
+						position,
+						time,
+					)
+					.await?
+				{
+					return Ok(());
+				}
 				for pointer in self.pointers(client) {
 					if let Some(delta) = delta {
 						pointer
@@ -151,6 +165,19 @@ impl Devices {
 				pressed,
 				time,
 			} => {
+				// presses mid drag go nowhere, any release ends it
+				if matches!(
+					*self.drag.lock().await,
+					Drag::Dragging {
+						input: DragInput::Pointer,
+						..
+					}
+				) {
+					if !pressed {
+						self.drag_release(client, DragInput::Pointer).await?;
+					}
+					return Ok(());
+				}
 				if pressed {
 					self.click_focus(client, &surface).await?;
 				}
@@ -234,11 +261,20 @@ impl Devices {
 				}
 			}
 			SeatMessage::TouchMove { id, position, time } => {
+				if self
+					.drag_motion(client, DragInput::Touch(id), None, position, time)
+					.await?
+				{
+					return Ok(());
+				}
 				for touch in self.touches(client) {
 					touch.handle_touch_move(client, id, position, time).await?;
 				}
 			}
 			SeatMessage::TouchUp { id, time } => {
+				if self.drag_release(client, DragInput::Touch(id)).await? {
+					return Ok(());
+				}
 				for touch in self.touches(client) {
 					touch.handle_touch_up(client, id, time).await?;
 				}
@@ -255,6 +291,7 @@ impl Devices {
 				}
 			}
 			SeatMessage::Reset { surface } => {
+				self.reset_drag(client, &surface).await?;
 				for pointer in self.pointers(client) {
 					pointer.reset(client, &surface).await?;
 				}

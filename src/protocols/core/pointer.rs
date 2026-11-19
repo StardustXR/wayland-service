@@ -428,6 +428,25 @@ impl Pointer {
 		Ok(())
 	}
 
+	pub async fn grabbed_within(&self, origin: &Surface) -> bool {
+		matches!(&*self.focus.lock().await, Focus::Grabbed { surface, .. }
+			if surface.upgrade().is_some_and(|s| s.same_toplevel(origin)))
+	}
+	/// the pointer belongs to the drag until it's released, and comes back on the next motion
+	pub async fn yield_to_drag(&self, client: &mut Client) -> WaylandResult<()> {
+		let mut focus = self.focus.lock().await;
+		focus.drop_dead(client);
+		if let Some(old) = focus.surface() {
+			let serial = client.next_event_serial();
+			self.leave(client, self.id, serial, old.id).await?;
+			if self.version >= 5 {
+				self.frame(client, self.id).await?;
+			}
+		}
+		*focus = Focus::None;
+		Ok(())
+	}
+
 	pub async fn cursor_surface(&self) -> Option<Arc<Surface>> {
 		self.cursor_surface.lock().await.clone()
 	}

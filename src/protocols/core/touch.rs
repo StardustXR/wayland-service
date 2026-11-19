@@ -92,6 +92,18 @@ impl Touch {
 		self.frame(client, self.id).await
 	}
 
+	pub fn point_within(&self, origin: &Surface) -> Option<u32> {
+		self.points
+			.lock()
+			.iter()
+			.find(|(_, s)| s.upgrade().is_some_and(|s| s.same_toplevel(origin)))
+			.map(|(id, _)| *id)
+	}
+	/// the point belongs to the drag from here on, so the client never sees it go up
+	pub fn yield_to_drag(&self, id: u32) {
+		self.points.lock().remove(&id);
+	}
+
 	/// cancel ends every point the client has, not just the ones in this toplevel
 	pub async fn reset(
 		&self,

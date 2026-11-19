@@ -239,7 +239,12 @@ impl WlRegistry for Registry {
 			}
 			RegistryGlobals::DATA_DEVICE_MANAGER => {
 				tracing::info!("Binding data device manager");
-				client.insert(new_id.object_id, DataDeviceManager)?;
+				client.insert(
+					new_id.object_id,
+					DataDeviceManager {
+						version: new_id.version,
+					},
+				)?;
 			}
 			RegistryGlobals::OUTPUT => {
 				tracing::info!("Binding output");
