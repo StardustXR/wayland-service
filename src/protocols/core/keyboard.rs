@@ -13,7 +13,7 @@ use crate::{
 	KEYMAP_STORE,
 	client::Client,
 	error::WaylandResult,
-	protocols::core::surface::Surface,
+	protocols::core::{data_device, surface::Surface},
 	util::{WaylandTime as _, now},
 };
 
@@ -62,7 +62,8 @@ impl KeyboardState {
 	fn drop_dead_focus(&mut self, client: &Client) {
 		if let Self::Focused {
 			keymap_id, surface, ..
-		} = self && alive(client, surface).is_none()
+		} = self
+			&& alive(client, surface).is_none()
 		{
 			*self = Self::Unfocused {
 				keymap_id: *keymap_id,
@@ -144,7 +145,10 @@ impl Keyboard {
 				}
 				carried
 			}
-			_ => Vec::new(),
+			_ => {
+				data_device::offer_current(client).await?;
+				Vec::new()
+			}
 		};
 
 		let serial = client.next_event_serial();
@@ -210,6 +214,12 @@ impl Keyboard {
 			return Ok(());
 		}
 		self.focus(client, surface).await
+	}
+
+	pub async fn is_focused(&self, client: &Client) -> bool {
+		let mut state = self.state.lock().await;
+		state.drop_dead_focus(client);
+		matches!(*state, KeyboardState::Focused { .. })
 	}
 
 	pub async fn unfocus_toplevel(

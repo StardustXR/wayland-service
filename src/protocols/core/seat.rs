@@ -284,6 +284,15 @@ impl Devices {
 		Ok(())
 	}
 
+	pub async fn keyboard_focused(&self, client: &Client) -> bool {
+		for keyboard in self.keyboards(client) {
+			if keyboard.is_focused(client).await {
+				return true;
+			}
+		}
+		false
+	}
+
 	/// for grabs starting or ending, only matters if the toplevel had focus to begin with
 	pub async fn refocus_within(
 		&self,

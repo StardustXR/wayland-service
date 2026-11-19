@@ -5,7 +5,7 @@ use crate::{
 	error::WaylandResult,
 	protocols::core::{
 		callback::{Callback, WlCallback},
-		data_device,
+		data_device::{self, DataDevice},
 		output::Output,
 		seat::{Devices, Seat},
 	},
@@ -32,7 +32,7 @@ pub struct Display {
 	pub seat: OnceLock<Arc<Seat>>,
 	pub devices: Devices,
 	pub outputs: Mutex<Vec<Weak<Output>>>,
-	pub data_device: Mutex<Option<ObjectId>>,
+	pub data_devices: Mutex<Vec<Weak<DataDevice>>>,
 	id_counter: CounterU32,
 	pub creation_time: Instant,
 }
@@ -44,13 +44,16 @@ impl Display {
 			seat: OnceLock::new(),
 			devices: Devices::default(),
 			outputs: Mutex::new(Vec::new()),
-			data_device: Mutex::new(None),
+			data_devices: Mutex::new(Vec::new()),
 			id_counter: CounterU32::new(SERVER_ID_START),
 			creation_time: Instant::now(),
 		}
 	}
 	pub fn outputs(&self, client: &crate::client::Client) -> Vec<Arc<Output>> {
 		client.live(&self.outputs, |o| o.id)
+	}
+	pub fn data_devices(&self, client: &crate::client::Client) -> Vec<Arc<DataDevice>> {
+		client.live(&self.data_devices, |d| d.id)
 	}
 	pub fn next_server_id(&self) -> ObjectId {
 		unsafe { ObjectId::from_raw(self.id_counter.get()) }

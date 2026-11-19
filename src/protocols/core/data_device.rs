@@ -19,9 +19,7 @@ use waynest_server::Client as _;
 // another to read it. Known gaps, in rough order of how much they'll bite:
 // - Drag-and-drop is unimplemented, start_drag cancels the source immediately and
 //   actions/action, enter/motion/drop/leave are all no-ops or unused.
-// - Only one global clipboard selection is tracked (no per-seat scoping), and only one
-//   wl_data_device per client is supported (mirrors the existing single-seat/output
-//   assumption elsewhere in this codebase), the most recently created one wins.
+// - Only one global clipboard selection is tracked (no per-seat scoping).
 // - No serial validation anywhere.
 //
 // This whole in-process broadcast scheme is a stand-in and should be swapped out for a
@@ -95,16 +93,13 @@ impl WlDataDeviceManager for DataDeviceManager {
 		id: ObjectId,
 		_seat: ObjectId,
 	) -> WaylandResult<()> {
-		client.insert(id, DataDevice { id })?;
-		*client.display()?.data_device.lock() = Some(id);
-
-		// If a clipboard selection already exists, hand this brand-new device an offer
-		// for it immediately, otherwise it'd never find out about the current selection.
-		let selection = CLIPBOARD.lock().clone();
-		if selection.is_some() {
-			offer_selection(client, id, selection).await?;
+		let device = client.insert(id, DataDevice { id })?;
+		let display = client.display()?;
+		display.data_devices.lock().push(Arc::downgrade(&device));
+		if display.devices.keyboard_focused(client).await {
+			let selection = CLIPBOARD.lock().clone();
+			offer_selection(client, &device, selection).await?;
 		}
-
 		Ok(())
 	}
 }
@@ -157,7 +152,7 @@ impl WlDataSource for DataSource {
 #[derive(Debug, waynest_server::RequestDispatcher)]
 #[waynest(error = crate::error::WaylandError, connection = crate::client::Client)]
 pub struct DataDevice {
-	id: ObjectId,
+	pub id: ObjectId,
 }
 impl WlDataDevice for DataDevice {
 	type Connection = Client;
@@ -220,7 +215,6 @@ impl WlDataDevice for DataDevice {
 		client: &mut Self::Connection,
 		_sender_id: ObjectId,
 	) -> WaylandResult<()> {
-		client.display()?.data_device.lock().take_if(|id| *id == self.id);
 		client.remove(self.id);
 		Ok(())
 	}
@@ -231,10 +225,10 @@ impl WlDataDevice for DataDevice {
 /// selection just sends a NULL `selection` event.
 async fn offer_selection(
 	client: &mut Client,
-	device_id: ObjectId,
+	device: &DataDevice,
 	selection: Option<ClipboardSelection>,
 ) -> WaylandResult<()> {
-	let device = client.try_get::<DataDevice>(device_id)?;
+	let device_id = device.id;
 	let Some(ClipboardSelection {
 		source,
 		mime_types,
@@ -269,14 +263,27 @@ fn source_alive(client: &Client, source: &Arc<DataSource>) -> bool {
 		.is_some_and(|s| Arc::ptr_eq(&s, source))
 }
 
+/// the spec wants this right before a client's keyboard enter
+pub async fn offer_current(client: &mut Client) -> WaylandResult<()> {
+	let display = client.display()?;
+	for device in display.data_devices(client) {
+		let selection = CLIPBOARD.lock().clone();
+		offer_selection(client, &device, selection).await?;
+	}
+	Ok(())
+}
+
 /// Handles the `Message::Clipboard*` variants, dispatched from socket.rs's per-client
 /// message loop.
 pub async fn handle_message(client: &mut Client, message: Message) -> WaylandResult<()> {
 	match message {
+		// only a client with keyboard focus may see the selection, the rest get it on enter
 		Message::ClipboardSelection(selection) => {
-			let device_id = *client.display()?.data_device.lock();
-			if let Some(device_id) = device_id {
-				offer_selection(client, device_id, selection).await?;
+			let display = client.display()?;
+			if display.devices.keyboard_focused(client).await {
+				for device in display.data_devices(client) {
+					offer_selection(client, &device, selection.clone()).await?;
+				}
 			}
 		}
 		Message::ClipboardSend {
