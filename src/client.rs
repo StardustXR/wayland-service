@@ -1,4 +1,10 @@
-use std::{os::fd::OwnedFd, sync::Arc};
+use std::{
+	os::fd::OwnedFd,
+	sync::{
+		Arc,
+		atomic::{AtomicU32, Ordering},
+	},
+};
 
 use pin_project_lite::pin_project;
 use stardust_xr_fusion::types::Size2;
@@ -62,12 +68,14 @@ pub enum Message {
 	ClipboardCancel(Arc<DataSource>),
 }
 
+static SERIALS: AtomicU32 = AtomicU32::new(1);
+
 pin_project! {
 	pub struct Client {
 		store: Store<Client, WaylandError>,
 		#[pin]
 		connection: Socket,
-		next_event_serial: u32,
+		last_event_serial: Option<u32>,
 	}
 }
 impl Connection for Client {
@@ -124,7 +132,7 @@ impl Client {
 		Ok(Self {
 			store: Store::new(),
 			connection: Socket::new(unix_stream.into_std()?)?,
-			next_event_serial: 0,
+			last_event_serial: None,
 		})
 	}
 	/// ids get reused once deleted, so an object we kept an Arc to might not be what the client
@@ -144,10 +152,16 @@ impl Client {
 		list.retain(|d| d.upgrade().is_some_and(|d| self.holds(id(&d), &*d)));
 		list.iter().filter_map(std::sync::Weak::upgrade).collect()
 	}
+	/// serials are global so requests from different clients can be ordered
 	pub fn next_event_serial(&mut self) -> u32 {
-		let prev = self.next_event_serial;
-		self.next_event_serial = self.next_event_serial.wrapping_add(1);
-		prev
+		let serial = SERIALS.fetch_add(1, Ordering::Relaxed);
+		self.last_event_serial = Some(serial);
+		serial
+	}
+	/// only says the serial isn't from the future, not that this client got exactly it
+	pub fn issued(&self, serial: u32) -> bool {
+		self.last_event_serial
+			.is_some_and(|last| last.wrapping_sub(serial) as i32 >= 0)
 	}
 }
 

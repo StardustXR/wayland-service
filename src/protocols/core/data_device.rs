@@ -20,7 +20,6 @@ use waynest_server::Client as _;
 // - Drag-and-drop is unimplemented, start_drag cancels the source immediately and
 //   actions/action, enter/motion/drop/leave are all no-ops or unused.
 // - Only one global clipboard selection is tracked (no per-seat scoping).
-// - No serial validation anywhere.
 //
 // This whole in-process broadcast scheme is a stand-in and should be swapped out for a
 // real implementation built on stardust's native clipboard/data-transfer items, so
@@ -36,6 +35,7 @@ pub struct ClipboardSelection {
 	source: Arc<DataSource>,
 	mime_types: Vec<String>,
 	owner: MessageSink,
+	serial: u32,
 }
 impl ClipboardSelection {
 	fn cancel(self) {
@@ -181,32 +181,52 @@ impl WlDataDevice for DataDevice {
 		client: &mut Self::Connection,
 		_sender_id: ObjectId,
 		source: Option<ObjectId>,
-		_serial: u32,
+		serial: u32,
 	) -> WaylandResult<()> {
-		let Some(source_id) = source else {
-			let mut clipboard = CLIPBOARD.lock();
-			if let Some(old) = clipboard.take() {
-				old.cancel();
-				broadcast_selection(&clipboard);
+		let owner = client.message_sink()?;
+		let selection = match source {
+			Some(id) => {
+				let source = client.try_get::<DataSource>(id)?;
+				let mime_types = source.mime_types.lock().clone();
+				Some(ClipboardSelection {
+					source,
+					mime_types,
+					owner,
+					serial,
+				})
 			}
-			return Ok(());
-		};
-		let source = client.try_get::<DataSource>(source_id)?;
-		let mime_types = source.mime_types.lock().clone();
-		let selection = ClipboardSelection {
-			source,
-			mime_types,
-			owner: client.message_sink()?,
+			None => None,
 		};
 
-		let mut clipboard = CLIPBOARD.lock();
-		if let Some(old) = clipboard.replace(selection.clone())
-			&& !Arc::ptr_eq(&old.source, &selection.source)
-		{
-			old.cancel();
+		let rejected = {
+			let mut clipboard = CLIPBOARD.lock();
+			// a request racing a newer selection from any client loses
+			let stale = !client.issued(serial)
+				|| clipboard
+					.as_ref()
+					.is_some_and(|s| s.serial.wrapping_sub(serial) as i32 > 0);
+			if stale {
+				selection
+			} else {
+				let old = std::mem::replace(&mut *clipboard, selection);
+				let changed = old.is_some() || clipboard.is_some();
+				if let Some(old) = old
+					&& !clipboard
+						.as_ref()
+						.is_some_and(|s| Arc::ptr_eq(&s.source, &old.source))
+				{
+					old.cancel();
+				}
+				if changed {
+					broadcast_selection(&clipboard);
+				}
+				None
+			}
+		};
+		if let Some(s) = rejected {
+			tracing::debug!("ignoring set_selection with stale serial {serial}");
+			s.source.cancelled(client, s.source.id).await?;
 		}
-		broadcast_selection(&clipboard);
-
 		Ok(())
 	}
 
@@ -233,6 +253,7 @@ async fn offer_selection(
 		source,
 		mime_types,
 		owner,
+		..
 	}) = selection
 	else {
 		return device.selection(client, device_id, None).await;
