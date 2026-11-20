@@ -157,7 +157,7 @@ impl Subsurface {
 			subsurface.is_effectively_sync()
 		});
 
-		// First commit: add child when buffer is ready
+		// added even without a buffer, firefox hangs its page layers off a container that never gets one
 		let subsurface_weak = Arc::downgrade(self);
 		self.surface
 			.add_updated_current_state_handler(move |surface| {
@@ -170,17 +170,14 @@ impl Subsurface {
 				let Some(panel_item) = parent.panel_item() else {
 					return true;
 				};
-
-				if surface.currently_has_valid_buffer() {
-					let toplevel = parent.toplevel.read().clone();
-					*surface.toplevel.write() = toplevel;
-					let Some(info) = subsurface.create_child_info(surface.current_size()) else {
-						return false;
-					};
+				let toplevel = parent.toplevel.read().clone();
+				*surface.toplevel.write() = toplevel;
+				if let Some(info) = subsurface.create_child_info(surface.current_size()) {
 					panel_item.add_child(&subsurface.surface, info);
-					return false; // Remove handler after adding child once
+					// this commit's frame went out before the child existed and is still waiting
+					surface.resubmit_buffer();
 				}
-				true
+				false
 			});
 		let subsurface_weak = Arc::downgrade(self);
 		self.surface.add_commit_handler(move |_| {
@@ -198,9 +195,7 @@ impl Subsurface {
 			};
 			let surface = subsurface.surface.clone();
 
-			if surface.currently_has_valid_buffer()
-				&& let Some(panel_item) = surface.panel_item()
-			{
+			if let Some(panel_item) = surface.panel_item() {
 				let state = subsurface.state.lock();
 				let subsurface_state = *state.current();
 				drop(state);
