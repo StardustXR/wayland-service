@@ -138,6 +138,9 @@ pub struct SurfaceState {
 	pub input_region: Option<Vec<Patch>>,
 	/// lets the client leave alpha as garbage wherever it covers
 	pub opaque_region: Option<Vec<Patch>>,
+	/// clients send the region a frame or two after a resize, so a resize alone can only make this
+	/// true, dropping it on a stale region would flash their garbage alpha
+	opaque_cover: bool,
 
 	frame_callbacks: Vec<Arc<Callback>>,
 }
@@ -154,12 +157,14 @@ impl Default for SurfaceState {
 			viewport_dst: None,
 			input_region: None,
 			opaque_region: None,
+			opaque_cover: false,
 			frame_callbacks: Vec::new(),
 		}
 	}
 }
 impl BufferedState for SurfaceState {
 	fn apply(&mut self, pending: &mut Self) {
+		let size = self.size();
 		self.buffer = pending.buffer.clone();
 		self.attached |= std::mem::take(&mut pending.attached);
 		self.density = pending.density;
@@ -169,7 +174,12 @@ impl BufferedState for SurfaceState {
 		self.viewport_src = pending.viewport_src;
 		self.viewport_dst = pending.viewport_dst;
 		self.input_region = pending.input_region.clone();
-		self.opaque_region = pending.opaque_region.clone();
+		if self.opaque_region != pending.opaque_region {
+			self.opaque_region = pending.opaque_region.clone();
+			self.opaque_cover = self.covered();
+		} else if self.size() != size {
+			self.opaque_cover |= self.covered();
+		}
 		self.frame_callbacks.append(&mut pending.frame_callbacks);
 	}
 
@@ -185,6 +195,7 @@ impl BufferedState for SurfaceState {
 			viewport_dst: self.viewport_dst,
 			input_region: self.input_region.clone(),
 			opaque_region: self.opaque_region.clone(),
+			opaque_cover: self.opaque_cover,
 			frame_callbacks: Vec::new(),
 		}
 	}
@@ -207,9 +218,9 @@ impl SurfaceState {
 		self.buffer.as_ref().map(|b| b.size())
 	}
 	pub fn opaque(&self, buffer: &Buffer) -> bool {
-		if !buffer.is_transparent() {
-			return true;
-		}
+		!buffer.is_transparent() || self.opaque_cover
+	}
+	fn covered(&self) -> bool {
 		let (Some(r), Some(size)) = (&self.opaque_region, self.size()) else {
 			return false;
 		};
@@ -254,6 +265,8 @@ pub struct Surface {
 	/// used to store unapplied surface updates, so they can be applied later
 	buffered_surface_update: Mutex<Option<BufferSubmit>>,
 	current_buffer_submit: Mutex<Option<BufferSubmit>>,
+	/// opacity and crop the shell last got, so a commit changing only those still reaches it
+	shown_as: Mutex<Option<(bool, Option<Rect>)>>,
 	// TODO: make this async
 	pub toplevel: RwLock<Weak<Toplevel>>,
 }
@@ -299,6 +312,7 @@ impl Surface {
 				toplevel: RwLock::new(Weak::new()),
 				buffered_surface_update: Mutex::new(None),
 				current_buffer_submit: Mutex::new(None),
+				shown_as: Mutex::new(None),
 			}
 		});
 		surface.add_updated_current_state_handler(|surface| {
@@ -577,34 +591,47 @@ impl Surface {
 			)
 		};
 		if !attached {
+			// opacity and crop can change without a new buffer, the shell still has to hear about it
+			if *self.shown_as.lock() != Some((opaque, src)) {
+				self.reapply_buffer();
+			}
 			return;
 		}
 		let Some(buffer) = buffer else {
 			self.current_buffer_submit.lock().take();
 			self.buffered_surface_update.lock().take();
+			*self.shown_as.lock() = None;
 			return;
 		};
-		if let Some(submit) = buffer.update() {
-			if let Some(panel_item) = self.panel_item()
-				&& let Some(surface_id) = self.surface_id.get()
-			{
-				if let Some(shell) = panel_item.panel_shell()
-					&& let Err(e) = shell.update_surface_dmatex(
-						*surface_id,
-						submit.dmatex(),
-						submit.acquire(),
-						submit.release(),
-						opaque,
-						src,
-					) {
-					tracing::error!("failed to send surface update to panel shell: {e}");
-				}
-				self.current_buffer_submit.lock().replace(submit);
-			} else {
-				self.current_buffer_submit.lock().take();
-				self.buffered_surface_update.lock().replace(submit);
-			}
+		let Some(submit) = buffer.update() else {
+			return;
+		};
+		if self.send(&submit, opaque, src) {
+			self.current_buffer_submit.lock().replace(submit);
+		} else {
+			self.current_buffer_submit.lock().take();
+			self.buffered_surface_update.lock().replace(submit);
 		}
+	}
+	/// false if there's nowhere to show it yet
+	fn send(&self, submit: &BufferSubmit, opaque: bool, src: Option<Rect>) -> bool {
+		let (Some(panel_item), Some(surface_id)) = (self.panel_item(), self.surface_id.get())
+		else {
+			return false;
+		};
+		if let Some(shell) = panel_item.panel_shell()
+			&& let Err(e) = shell.update_surface_dmatex(
+				*surface_id,
+				submit.dmatex(),
+				submit.acquire(),
+				submit.release(),
+				opaque,
+				src,
+			) {
+			tracing::error!("failed to send surface update to panel shell: {e}");
+		}
+		*self.shown_as.lock() = Some((opaque, src));
+		true
 	}
 	fn shown_state(&self) -> (bool, Option<Rect>) {
 		let state = self.state.lock();
@@ -621,53 +648,35 @@ impl Surface {
 	}
 	pub fn apply_buffered_surface_update_recursive(&self) {
 		let (opaque, src) = self.shown_state();
-		if let Some(submit) = self.buffered_surface_update.lock().take()
-			&& let Some(panel_item) = self.panel_item()
-			&& let Some(surface_id) = self.surface_id.get()
-		{
-			if let Some(shell) = panel_item.panel_shell()
-				&& let Err(e) = shell.update_surface_dmatex(
-					*surface_id,
-					submit.dmatex(),
-					submit.acquire(),
-					submit.release(),
-					opaque,
-					src,
-				) {
-				tracing::error!("failed to send surface update to panel shell: {e}");
+		let submit = self.buffered_surface_update.lock().take();
+		if let Some(submit) = submit {
+			if self.send(&submit, opaque, src) {
+				self.current_buffer_submit.lock().replace(submit);
+			} else {
+				self.buffered_surface_update.lock().replace(submit);
 			}
-			self.current_buffer_submit.lock().replace(submit);
 		}
 		for child in self.children.get_valid_contents() {
 			child.apply_buffered_surface_update_recursive();
 		}
 	}
 	pub fn reapply_buffer_recursive(&self) {
-		let submit = self.current_buffer_submit.lock().take();
-		if let Some(submit) = submit.and_then(BufferSubmit::reapply) {
-			let (opaque, src) = self.shown_state();
-			if let Some(panel_item) = self.panel_item()
-				&& let Some(surface_id) = self.surface_id.get()
-			{
-				if let Some(shell) = panel_item.panel_shell()
-					&& let Err(e) = shell.update_surface_dmatex(
-						*surface_id,
-						submit.dmatex(),
-						submit.acquire(),
-						submit.release(),
-						opaque,
-						src,
-					) {
-					tracing::error!("failed to send surface update to panel shell: {e}");
-				}
-				self.current_buffer_submit.lock().replace(submit);
-			} else {
-				self.current_buffer_submit.lock().take();
-				self.buffered_surface_update.lock().replace(submit);
-			}
-		}
+		self.reapply_buffer();
 		for child in self.children.get_valid_contents() {
 			child.reapply_buffer_recursive();
+		}
+	}
+	/// a fresh release point for the same buffer, so the client doesn't get a release while it's still shown
+	fn reapply_buffer(&self) {
+		let submit = self.current_buffer_submit.lock().take();
+		let Some(submit) = submit.and_then(BufferSubmit::reapply) else {
+			return;
+		};
+		let (opaque, src) = self.shown_state();
+		if self.send(&submit, opaque, src) {
+			self.current_buffer_submit.lock().replace(submit);
+		} else {
+			self.buffered_surface_update.lock().replace(submit);
 		}
 	}
 
