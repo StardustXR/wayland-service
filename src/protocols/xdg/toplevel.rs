@@ -175,10 +175,11 @@ impl Toplevel {
 			{
 				// TODO: modify release target point so we can send an actual update
 				// without the client having to make a new commit
-				std::mem::replace(panel_item, new_item)
+				std::mem::replace(panel_item, new_item.clone())
 			}
 			_ => return,
 		};
+		new_item.adopt_children(&old);
 		drop(old);
 		self.wl_surface().reapply_buffer_recursive();
 	}

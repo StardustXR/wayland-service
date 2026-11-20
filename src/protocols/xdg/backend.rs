@@ -35,8 +35,21 @@ pub struct XdgBackend {
 	toplevel: Weak<Toplevel>,
 	panel_shell: OnceLock<PanelShell>,
 	output_spatial: OnceLock<SpatialRef>,
-	pub children: DashMap<u64, (Weak<Surface>, ChildState)>,
+	pub children: DashMap<u64, Child>,
 	task: OnceLock<AbortHandle>,
+}
+
+#[derive(Debug)]
+pub struct Child {
+	surface: Weak<Surface>,
+	pub info: ChildState,
+	placed: Placement,
+}
+/// the shell drops a child whose parent it doesn't know, so it waits here until the parent is created
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Placement {
+	AwaitingParent,
+	Created,
 }
 impl Drop for XdgBackend {
 	fn drop(&mut self) {
@@ -181,7 +194,7 @@ impl XdgBackend {
 	fn surface_from_id(&self, id: &SurfaceId) -> Option<Arc<Surface>> {
 		match id {
 			SurfaceId::Toplevel => Some(self.toplevel()?.wl_surface().clone()),
-			SurfaceId::Child { id } => self.children.get(id).as_deref().and_then(|c| c.0.upgrade()),
+			SurfaceId::Child { id } => self.children.get(id).and_then(|c| c.surface.upgrade()),
 		}
 	}
 
@@ -192,13 +205,64 @@ impl XdgBackend {
 		if info.id != id {
 			tracing::warn!("id mismatch between child state and surf");
 		}
-		self.children
-			.insert(id, (Arc::downgrade(surface), info.clone()));
+		self.place(Arc::downgrade(surface), info);
+	}
 
-		if let Some(shell) = self.panel_shell()
-			&& let Err(e) = shell.create_child(info)
+	/// creating a child also creates everything that was waiting on it
+	fn place(&self, surface: Weak<Surface>, info: ChildState) {
+		let id = info.id;
+		let ready = match info.parent {
+			SurfaceId::Toplevel => true,
+			SurfaceId::Child { id } => self
+				.children
+				.get(&id)
+				.is_some_and(|c| c.placed == Placement::Created),
+		};
+		if ready
+			&& let Some(shell) = self.panel_shell()
+			&& let Err(e) = shell.create_child(info.clone())
 		{
 			tracing::error!("failed to send child creation to panel shell: {e}");
+		}
+		let placed = match ready {
+			true => Placement::Created,
+			false => Placement::AwaitingParent,
+		};
+		self.children.insert(
+			id,
+			Child {
+				surface,
+				info,
+				placed,
+			},
+		);
+		if !ready {
+			return;
+		}
+		for w in self.dependents(id) {
+			if let Some((_, c)) = self.children.remove(&w) {
+				self.place(c.surface, c.info);
+			}
+		}
+	}
+	fn dependents(&self, id: u64) -> Vec<u64> {
+		self.children
+			.iter()
+			.filter(|c| c.info.parent == SurfaceId::Child { id })
+			.map(|c| *c.key())
+			.collect()
+	}
+
+	/// a new shell knows no children yet, so they're all placed again
+	pub fn adopt_children(&self, old: &XdgBackend) {
+		let live = old
+			.children
+			.iter()
+			.filter(|c| c.surface.strong_count() > 0)
+			.map(|c| (c.surface.clone(), c.info.clone()))
+			.collect::<Vec<_>>();
+		for (surface, info) in live {
+			self.place(surface, info);
 		}
 	}
 
@@ -206,11 +270,17 @@ impl XdgBackend {
 		let Some(SurfaceUpdateTarget::Child { id }) = surface.surface_id.get() else {
 			return;
 		};
-
-		if let Some(mut child) = self.children.get_mut(id) {
-			child.1.geometry = geometry;
+		let Some(mut child) = self.children.get_mut(id) else {
+			return;
+		};
+		if child.info.geometry == geometry {
+			return;
 		}
-		if let Some(shell) = self.panel_shell()
+		child.info.geometry = geometry;
+		let created = child.placed == Placement::Created;
+		drop(child);
+		if created
+			&& let Some(shell) = self.panel_shell()
 			&& let Err(e) = shell.move_child(*id, geometry)
 		{
 			tracing::error!("failed to send child move to panel shell: {e}");
@@ -221,17 +291,21 @@ impl XdgBackend {
 		let Some(SurfaceUpdateTarget::Child { id }) = surface.surface_id.get() else {
 			return;
 		};
-
-		if let Some(mut child) = self.children.get_mut(id) {
-			child.1.z_order = z_order;
-			let info = child.1.clone();
-			drop(child);
-			// TODO: this seems very wrong, idk if we ever communicate the z order here
-			if let Some(shell) = self.panel_shell()
-				&& let Err(e) = shell.move_child(*id, info.geometry)
-			{
-				tracing::error!("failed to send child z order to panel shell: {e}");
-			}
+		let Some(mut child) = self.children.get_mut(id) else {
+			return;
+		};
+		if child.info.z_order == z_order {
+			return;
+		}
+		child.info.z_order = z_order;
+		let (created, geometry) = (child.placed == Placement::Created, child.info.geometry);
+		drop(child);
+		// TODO: this seems very wrong, idk if we ever communicate the z order here
+		if created
+			&& let Some(shell) = self.panel_shell()
+			&& let Err(e) = shell.move_child(*id, geometry)
+		{
+			tracing::error!("failed to send child z order to panel shell: {e}");
 		}
 	}
 
@@ -239,12 +313,26 @@ impl XdgBackend {
 		let Some(SurfaceUpdateTarget::Child { id }) = surface.surface_id.get() else {
 			return;
 		};
-		self.children.remove(id);
-
+		let Some((_, child)) = self.children.remove(id) else {
+			return;
+		};
+		if child.placed != Placement::Created {
+			return;
+		}
 		if let Some(shell) = self.panel_shell()
 			&& let Err(e) = shell.destroy_child(*id)
 		{
 			tracing::error!("failed to send child destruction to panel shell: {e}");
+		}
+		self.orphan(*id);
+	}
+	/// the shell takes a child's whole subtree down with it
+	fn orphan(&self, id: u64) {
+		for d in self.dependents(id) {
+			if let Some(mut c) = self.children.get_mut(&d) {
+				c.placed = Placement::AwaitingParent;
+			}
+			self.orphan(d);
 		}
 	}
 }

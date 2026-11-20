@@ -320,7 +320,7 @@ impl WlSubsurface for Subsurface {
 			&& let Some(panel_item) = parent.panel_item()
 			&& let Some(child_entry) = panel_item.children.get(sibling_id)
 		{
-			child_entry.1.z_order
+			child_entry.info.z_order
 		} else {
 			0
 		};
@@ -345,7 +345,7 @@ impl WlSubsurface for Subsurface {
 			&& let Some(panel_item) = parent.panel_item()
 			&& let Some(child_entry) = panel_item.children.get(sibling_id)
 		{
-			child_entry.1.z_order
+			child_entry.info.z_order
 		} else {
 			0
 		};
