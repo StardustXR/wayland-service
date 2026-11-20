@@ -136,6 +136,8 @@ pub struct SurfaceState {
 
 	/// none takes input everywhere, empty takes none
 	pub input_region: Option<Vec<Patch>>,
+	/// lets the client leave alpha as garbage wherever it covers
+	pub opaque_region: Option<Vec<Patch>>,
 
 	frame_callbacks: Vec<Arc<Callback>>,
 }
@@ -151,6 +153,7 @@ impl Default for SurfaceState {
 			viewport_src: None,
 			viewport_dst: None,
 			input_region: None,
+			opaque_region: None,
 			frame_callbacks: Vec::new(),
 		}
 	}
@@ -166,6 +169,7 @@ impl BufferedState for SurfaceState {
 		self.viewport_src = pending.viewport_src;
 		self.viewport_dst = pending.viewport_dst;
 		self.input_region = pending.input_region.clone();
+		self.opaque_region = pending.opaque_region.clone();
 		self.frame_callbacks.append(&mut pending.frame_callbacks);
 	}
 
@@ -180,6 +184,7 @@ impl BufferedState for SurfaceState {
 			viewport_src: self.viewport_src,
 			viewport_dst: self.viewport_dst,
 			input_region: self.input_region.clone(),
+			opaque_region: self.opaque_region.clone(),
 			frame_callbacks: Vec::new(),
 		}
 	}
@@ -200,6 +205,18 @@ impl SurfaceState {
 			return Some([(src.size.x * d) as usize, (src.size.y * d) as usize].into());
 		}
 		self.buffer.as_ref().map(|b| b.size())
+	}
+	pub fn opaque(&self, buffer: &Buffer) -> bool {
+		if !buffer.is_transparent() {
+			return true;
+		}
+		let (Some(r), Some(size)) = (&self.opaque_region, self.size()) else {
+			return false;
+		};
+		let w = (size.x as f32 / self.density) as u32;
+		let h = (size.y as f32 / self.density) as u32;
+		let covered: u64 = r.iter().map(|p| p.area_within(w, h)).sum();
+		w > 0 && h > 0 && covered == w as u64 * h as u64
 	}
 	pub fn uv_src(&self) -> Option<Rect> {
 		let src = self.viewport_src?;
@@ -549,13 +566,14 @@ impl Surface {
 }
 impl Surface {
 	fn buffer_update(&self) {
-		let (attached, buffer, src) = {
+		let (attached, buffer, src, opaque) = {
 			let mut state = self.state.lock();
 			let current = &mut state.current;
 			(
 				std::mem::take(&mut current.attached),
 				current.buffer.clone(),
 				current.uv_src(),
+				current.buffer.as_ref().is_some_and(|b| current.opaque(b)),
 			)
 		};
 		if !attached {
@@ -576,7 +594,7 @@ impl Surface {
 						submit.dmatex(),
 						submit.acquire(),
 						submit.release(),
-						!buffer.is_transparent(),
+						opaque,
 						src,
 					) {
 					tracing::error!("failed to send surface update to panel shell: {e}");
@@ -588,6 +606,11 @@ impl Surface {
 			}
 		}
 	}
+	fn shown_state(&self) -> (bool, Option<Rect>) {
+		let state = self.state.lock();
+		let c = state.current();
+		(c.buffer.as_ref().is_some_and(|b| c.opaque(b)), c.uv_src())
+	}
 	/// shows what the client last committed again, for when it moves onto another panel item
 	pub fn resubmit_buffer(&self) {
 		if self.buffered_surface_update.lock().is_some() {
@@ -597,6 +620,7 @@ impl Surface {
 		}
 	}
 	pub fn apply_buffered_surface_update_recursive(&self) {
+		let (opaque, src) = self.shown_state();
 		if let Some(submit) = self.buffered_surface_update.lock().take()
 			&& let Some(panel_item) = self.panel_item()
 			&& let Some(surface_id) = self.surface_id.get()
@@ -607,8 +631,8 @@ impl Surface {
 					submit.dmatex(),
 					submit.acquire(),
 					submit.release(),
-					!submit.buffer().is_transparent(),
-					self.state.lock().current().uv_src(),
+					opaque,
+					src,
 				) {
 				tracing::error!("failed to send surface update to panel shell: {e}");
 			}
@@ -621,6 +645,7 @@ impl Surface {
 	pub fn reapply_buffer_recursive(&self) {
 		let submit = self.current_buffer_submit.lock().take();
 		if let Some(submit) = submit.and_then(BufferSubmit::reapply) {
+			let (opaque, src) = self.shown_state();
 			if let Some(panel_item) = self.panel_item()
 				&& let Some(surface_id) = self.surface_id.get()
 			{
@@ -630,8 +655,8 @@ impl Surface {
 						submit.dmatex(),
 						submit.acquire(),
 						submit.release(),
-						!submit.buffer().is_transparent(),
-						self.state.lock().current().uv_src(),
+						opaque,
+						src,
 					) {
 					tracing::error!("failed to send surface update to panel shell: {e}");
 				}
@@ -735,11 +760,15 @@ impl WlSurface for Surface {
 	#[tracing::instrument(level = "debug", skip_all)]
 	async fn set_opaque_region(
 		&self,
-		_client: &mut Self::Connection,
+		client: &mut Self::Connection,
 		_sender_id: ObjectId,
-		_region: Option<ObjectId>,
+		region: Option<ObjectId>,
 	) -> WaylandResult<()> {
-		// nothing we can really do to repaint behind this so ignore it
+		let region = match region {
+			Some(r) => Some(client.try_get::<Region>(r)?.patches()),
+			None => None,
+		};
+		self.state.lock().pending.opaque_region = region;
 		Ok(())
 	}
 

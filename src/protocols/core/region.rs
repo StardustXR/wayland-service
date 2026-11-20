@@ -37,6 +37,11 @@ impl Patch {
 			.into(),
 		}
 	}
+	pub fn area_within(&self, w: u32, h: u32) -> u64 {
+		let x = self.max.x.min(w).saturating_sub(self.min.x) as u64;
+		let y = self.max.y.min(h).saturating_sub(self.min.y) as u64;
+		x * y
+	}
 	fn overlaps(&self, o: &Self) -> bool {
 		self.min.x < o.max.x && o.min.x < self.max.x && self.min.y < o.max.y && o.min.y < self.max.y
 	}
