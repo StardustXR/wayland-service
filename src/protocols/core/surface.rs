@@ -1,4 +1,8 @@
-use super::{buffer::Buffer, callback::Callback};
+use super::{
+	buffer::Buffer,
+	callback::Callback,
+	region::{Patch, Region},
+};
 use crate::{
 	client::{Client, Message, MessageSink},
 	error::WaylandResult,
@@ -130,6 +134,9 @@ pub struct SurfaceState {
 	pub viewport_src: Option<Rect>,
 	pub viewport_dst: Option<Vector2<u32>>,
 
+	/// none takes input everywhere, empty takes none
+	pub input_region: Option<Vec<Patch>>,
+
 	frame_callbacks: Vec<Arc<Callback>>,
 }
 impl Default for SurfaceState {
@@ -143,6 +150,7 @@ impl Default for SurfaceState {
 			max_size: None,
 			viewport_src: None,
 			viewport_dst: None,
+			input_region: None,
 			frame_callbacks: Vec::new(),
 		}
 	}
@@ -157,6 +165,7 @@ impl BufferedState for SurfaceState {
 		self.max_size = pending.max_size;
 		self.viewport_src = pending.viewport_src;
 		self.viewport_dst = pending.viewport_dst;
+		self.input_region = pending.input_region.clone();
 		self.frame_callbacks.append(&mut pending.frame_callbacks);
 	}
 
@@ -170,6 +179,7 @@ impl BufferedState for SurfaceState {
 			max_size: self.max_size,
 			viewport_src: self.viewport_src,
 			viewport_dst: self.viewport_dst,
+			input_region: self.input_region.clone(),
 			frame_callbacks: Vec::new(),
 		}
 	}
@@ -417,6 +427,16 @@ impl Surface {
 	//     self.apply_surface_materials();
 	// }
 
+	/// whole surface is as big as a region can be, the child can't be updated after a resize
+	pub fn input_rects(&self) -> Vec<Rect> {
+		match &self.state.lock().current().input_region {
+			None => vec![Rect {
+				origin: [0.0; 2].into(),
+				size: [u32::MAX as f32; 2].into(),
+			}],
+			Some(r) => r.iter().map(Patch::rect).collect(),
+		}
+	}
 	#[tracing::instrument("debug", skip_all)]
 	pub fn current_size(&self) -> Option<Vector2<usize>> {
 		self.state.lock().current().size()
@@ -727,11 +747,16 @@ impl WlSurface for Surface {
 	#[tracing::instrument(level = "debug", skip_all)]
 	async fn set_input_region(
 		&self,
-		_client: &mut Self::Connection,
+		client: &mut Self::Connection,
 		_sender_id: ObjectId,
-		_region: Option<ObjectId>,
+		region: Option<ObjectId>,
 	) -> WaylandResult<()> {
-		// too complicated to implement this for now so who the hell cares
+		// copied now since the client may destroy the region before committing
+		let region = match region {
+			Some(r) => Some(client.try_get::<Region>(r)?.patches()),
+			None => None,
+		};
+		self.state.lock().pending.input_region = region;
 		Ok(())
 	}
 

@@ -5,7 +5,7 @@ use crate::util::{BufferedState, SurfaceCommitAwareBuffer};
 use mint::Vector2;
 use parking_lot::Mutex;
 use rand::random;
-use stardust_xr_panels::panel_item::{ChildState, Geometry, Rect, SurfaceId, SurfaceUpdateTarget};
+use stardust_xr_panels::panel_item::{ChildState, Geometry, SurfaceId, SurfaceUpdateTarget};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use waynest::ObjectId;
@@ -263,10 +263,7 @@ impl Subsurface {
 				size,
 			},
 			z_order: state.current().z_order,
-			input_regions: vec![Rect {
-				origin: [0.0; 2].into(),
-				size: [1.0; 2].into(),
-			}],
+			input_regions: self.surface.input_rects(),
 		})
 	}
 }

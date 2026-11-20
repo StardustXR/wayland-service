@@ -6,10 +6,9 @@ use crate::{
 	client::{Client, Message},
 	error::WaylandResult,
 };
-use mint::Vector2;
 use parking_lot::Mutex;
 use rand::random;
-use stardust_xr_panels::panel_item::{ChildState, Rect, SurfaceId, SurfaceUpdateTarget};
+use stardust_xr_panels::panel_item::{ChildState, SurfaceId, SurfaceUpdateTarget};
 use std::sync::{
 	Arc, Weak,
 	atomic::{AtomicBool, Ordering},
@@ -194,10 +193,7 @@ impl Popup {
 				parent,
 				geometry: self.positioner_data.lock().infinite_geometry(),
 				z_order: 1,
-				input_regions: vec![Rect {
-					origin: Vector2::from([0.0; 2]),
-					size: Vector2::from([1.0; 2]),
-				}],
+				input_regions: wl_surface.input_rects(),
 			},
 		);
 		true

@@ -6,6 +6,7 @@ pub mod drag;
 pub mod keyboard;
 pub mod output;
 pub mod pointer;
+pub mod region;
 pub mod seat;
 pub mod shm;
 pub mod shm_buffer_backing;
