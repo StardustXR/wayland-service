@@ -1,4 +1,5 @@
 use std::{
+	collections::HashMap,
 	future::ready,
 	sync::{
 		Arc, OnceLock, Weak,
@@ -29,7 +30,8 @@ use stardust_xr_molecules::{
 };
 use stardust_xr_panels::{
 	panel_item::{
-		ChildState, Geometry, PanelItem, PanelShell, PanelShellHandler, Rect, SurfaceUpdateTarget,
+		ChildState, Geometry, PanelItem, PanelShell, PanelShellHandler, Rect, SurfaceId,
+		SurfaceUpdateTarget,
 	},
 	panel_item_acceptor::PanelItemAcceptor,
 };
@@ -188,6 +190,9 @@ pub struct PanelItemUi {
 	model_spatial: Spatial,
 	field: Field,
 	part: ModelPart,
+	/// unscaled panel space, so children can be laid out in meters
+	content: SpatialRef,
+	children: RwLock<ChildPanels>,
 	input_task: OnceLock<AbortOnDrop>,
 	grabbable: RwLock<Grabbable>,
 	query: Node<ItemHandlerQuery>,
@@ -258,26 +263,14 @@ impl PanelItemUi {
 			Transform::from_scale(Self::get_size(size)),
 		)
 		.await?;
-		let model = Model::new(
-			client,
-			&model_spatial,
-			Resource::Namespaced {
-				namespace: crate::APP_ID.into(),
-				path: "panel".into(),
-			},
-		)
-		.await?;
-		let part = model
-			.get_part("Panel")
-			.await?
-			.context("panel model has no Panel part")?;
+		let (model, part) = panel_model(&model_spatial).await?;
 		let content_parent = grabbable.content_parent().clone();
 		let derezzable = Derezzable::new(client, content_parent.clone(), field.clone()).await?;
 		let acceptor_indicator = Lines::new(client, &field_spatial, vec![]).await?;
 		let query = ItemHandlerQuery::new(
 			Arc::downgrade(toplevel),
 			Arc::downgrade(seat),
-			field_spatial_ref,
+			field_spatial_ref.clone(),
 			size,
 		)
 		.await?;
@@ -286,6 +279,11 @@ impl PanelItemUi {
 			model,
 			field,
 			part,
+			content: field_spatial_ref,
+			children: RwLock::new(ChildPanels {
+				size: [size.x as u32, size.y as u32].into(),
+				panels: HashMap::new(),
+			}),
 			grabbable: RwLock::new(grabbable),
 			input_task: OnceLock::new(),
 			model_spatial,
@@ -387,12 +385,142 @@ impl PanelItemUi {
 	}
 }
 
+struct ChildModel {
+	info: ChildState,
+	spatial: Spatial,
+	_model: Model,
+	part: ModelPart,
+}
+
+const PANEL_WIDTH: f32 = 0.1;
+const PANEL_THICKNESS: f32 = 0.001;
+
 impl PanelItemUi {
 	fn get_size(size: impl Into<Vector2<usize>>) -> Vector3<f32> {
 		let size = size.into();
 		let width_to_height = size.y as f32 / size.x as f32;
 
-		[0.1, 0.1 * width_to_height, 0.001].into()
+		[PANEL_WIDTH, PANEL_WIDTH * width_to_height, PANEL_THICKNESS].into()
+	}
+
+	async fn add_child(&self, info: ChildState) -> anyhow::Result<()> {
+		// held while the model loads so the child's first frame waits for it instead of getting dropped
+		let mut children = self.children.write().await;
+		// other shells drop these too, there's nothing to place it relative to
+		if let SurfaceId::Child { id } = info.parent
+			&& !children.panels.contains_key(&id)
+		{
+			anyhow::bail!("child {} has no parent {id}", info.id);
+		}
+		let (spatial, _) = Spatial::new(CLIENT.wait(), &self.content, Transform::IDENTITY).await?;
+		let (model, part) = panel_model(&spatial).await?;
+		children.panels.insert(
+			info.id,
+			ChildModel {
+				info,
+				spatial,
+				_model: model,
+				part,
+			},
+		);
+		children.layout();
+		Ok(())
+	}
+}
+
+/// sized together so a layout never mixes a new toplevel size with old geometry
+struct ChildPanels {
+	/// toplevel size in pixels
+	size: Vector2<u32>,
+	panels: HashMap<u64, ChildModel>,
+}
+impl ChildPanels {
+	/// geometry is relative to the parent surface, so everything is redone whenever any of it moves
+	fn layout(&self) {
+		let m = PANEL_WIDTH / self.size.x.max(1) as f32;
+		for c in self.panels.values() {
+			let (origin, depth) = self.placement(&c.info);
+			let g = c.info.geometry.size;
+			let x = (origin.x as f32 + g.x as f32 / 2.0 - self.size.x as f32 / 2.0) * m;
+			let y = (self.size.y as f32 / 2.0 - origin.y as f32 - g.y as f32 / 2.0) * m;
+			_ = c
+				.spatial
+				.set_local_transform(Transform::from_translation_scale(
+					[x, y, PANEL_THICKNESS * depth as f32],
+					[g.x as f32 * m, g.y as f32 * m, PANEL_THICKNESS],
+				));
+		}
+	}
+	/// pixels from the toplevel's corner, and how many surfaces deep so each level sits in front of its parent
+	fn placement(&self, info: &ChildState) -> (Vector2<i32>, u32) {
+		let mut origin = info.geometry.origin;
+		let mut depth = 1;
+		let mut parent = info.parent;
+		while let SurfaceId::Child { id } = parent
+			&& let Some(p) = self.panels.get(&id)
+		{
+			origin.x += p.info.geometry.origin.x;
+			origin.y += p.info.geometry.origin.y;
+			depth += 1;
+			parent = p.info.parent;
+		}
+		(origin, depth)
+	}
+}
+
+async fn panel_model(spatial: &Spatial) -> anyhow::Result<(Model, ModelPart)> {
+	let model = Model::new(
+		CLIENT.wait(),
+		spatial,
+		Resource::Namespaced {
+			namespace: crate::APP_ID.into(),
+			path: "panel".into(),
+		},
+	)
+	.await?;
+	let part = model
+		.get_part("Panel")
+		.await?
+		.context("panel model has no Panel part")?;
+	Ok((model, part))
+}
+
+async fn show(
+	part: &ModelPart,
+	dmatex: DmatexRef,
+	acquire_point: u64,
+	release_point: DmatexSubmitRelease,
+	opaque: bool,
+	src: Option<Rect>,
+) {
+	_ = part
+		.set_material_parameter("opaque", MaterialParameter::Bool { value: opaque })
+		.await;
+	_ = part
+		.set_material_parameter("unlit", MaterialParameter::Bool { value: true })
+		.await;
+	let src = src.unwrap_or(Rect {
+		origin: [0.0; 2].into(),
+		size: [1.0; 2].into(),
+	});
+	_ = part
+		.set_material_parameter("uv_offset", MaterialParameter::Vec2 { value: src.origin })
+		.await;
+	_ = part
+		.set_material_parameter("uv_scale", MaterialParameter::Vec2 { value: src.size })
+		.await;
+	if let Err(e) = part
+		.set_material_parameter(
+			"diffuse",
+			MaterialParameter::Dmatex {
+				dmatex,
+				acquire_point,
+				release_point,
+			},
+		)
+		.await
+	{
+		tracing::error!("failed to set panel dmatex: {e}");
 	}
 }
 
@@ -407,44 +535,25 @@ impl PanelShellHandler for PanelItemUi {
 		opaque: bool,
 		src: Option<Rect>,
 	) {
-		// TODO: remove this when children are implemented
-		if !matches!(surface, SurfaceUpdateTarget::Toplevel) {
-			tracing::warn!("surface update early exit");
-			return;
-		}
-		_ = self
-			.part
-			.set_material_parameter("opaque", MaterialParameter::Bool { value: opaque })
-			.await;
-		_ = self
-			.part
-			.set_material_parameter("unlit", MaterialParameter::Bool { value: true })
-			.await;
-		let src = src.unwrap_or(Rect {
-			origin: [0.0; 2].into(),
-			size: [1.0; 2].into(),
-		});
-		_ = self
-			.part
-			.set_material_parameter("uv_offset", MaterialParameter::Vec2 { value: src.origin })
-			.await;
-		_ = self
-			.part
-			.set_material_parameter("uv_scale", MaterialParameter::Vec2 { value: src.size })
-			.await;
-		if let Err(e) = self
-			.part
-			.set_material_parameter(
-				"diffuse",
-				MaterialParameter::Dmatex {
+		match surface {
+			SurfaceUpdateTarget::Toplevel => {
+				show(
+					&self.part,
 					dmatex,
 					acquire_point,
 					release_point,
-				},
-			)
-			.await
-		{
-			tracing::error!("failed to set panel dmatex: {e}");
+					opaque,
+					src,
+				)
+				.await
+			}
+			SurfaceUpdateTarget::Child { id } => {
+				let children = self.children.read().await;
+				if let Some(c) = children.panels.get(&id) {
+					show(&c.part, dmatex, acquire_point, release_point, opaque, src).await
+				}
+			}
+			SurfaceUpdateTarget::Cursor => {}
 		}
 	}
 
@@ -454,6 +563,9 @@ impl PanelShellHandler for PanelItemUi {
 			.model_spatial
 			.set_local_transform(Transform::from_scale(size));
 		_ = self.field.set_shape(Shape::Box { size });
+		let mut children = self.children.write().await;
+		children.size = new_size;
+		children.layout();
 	}
 
 	async fn toplevel_max_size(&self, _ctx: gluon_ipc::Context, _max_size: Option<Size2>) {}
@@ -470,10 +582,32 @@ impl PanelShellHandler for PanelItemUi {
 
 	async fn set_cursor_visuals(&self, _ctx: gluon_ipc::Context, _geometry: Option<Geometry>) {}
 
-	// TODO: impl for subsurfaces
-	async fn create_child(&self, _ctx: gluon_ipc::Context, _child: ChildState) {}
+	async fn create_child(&self, _ctx: gluon_ipc::Context, child: ChildState) {
+		if let Err(e) = self.add_child(child).await {
+			tracing::error!("failed to create child panel: {e:#}");
+		}
+	}
 
-	async fn move_child(&self, _ctx: gluon_ipc::Context, _child_id: u64, _geometry: Geometry) {}
+	async fn move_child(&self, _ctx: gluon_ipc::Context, child_id: u64, geometry: Geometry) {
+		let mut children = self.children.write().await;
+		if let Some(c) = children.panels.get_mut(&child_id) {
+			c.info.geometry = geometry;
+		}
+		children.layout();
+	}
 
-	async fn destroy_child(&self, _ctx: gluon_ipc::Context, _child_id: u64) {}
+	/// takes the whole subtree with it, same as other shells
+	async fn destroy_child(&self, _ctx: gluon_ipc::Context, child_id: u64) {
+		let panels = &mut self.children.write().await.panels;
+		let mut gone = vec![child_id];
+		while let Some(id) = gone.pop() {
+			panels.remove(&id);
+			gone.extend(
+				panels
+					.iter()
+					.filter(|(_, c)| c.info.parent == SurfaceId::Child { id })
+					.map(|(k, _)| *k),
+			);
+		}
+	}
 }
