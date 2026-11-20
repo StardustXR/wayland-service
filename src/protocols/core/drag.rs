@@ -83,7 +83,7 @@ impl DragIcon {
 				size: [size.x as u32, size.y as u32].into(),
 			}),
 		);
-		self.surface.buffer_update();
+		self.surface.resubmit_buffer();
 	}
 	/// the client sets its own cursor again once the pointer enters after the drag
 	fn hide(&mut self) {

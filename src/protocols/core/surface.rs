@@ -119,6 +119,8 @@ pub enum RoleError {
 #[derive(Debug)]
 pub struct SurfaceState {
 	pub buffer: Option<Arc<Buffer>>,
+	/// a commit without an attach keeps showing the old submit, resubmitting would release a buffer the client still thinks we hold
+	attached: bool,
 	pub density: f32,
 	pub geometry: Option<Geometry>,
 	pub min_size: Option<Vector2<u32>>,
@@ -134,6 +136,7 @@ impl Default for SurfaceState {
 	fn default() -> Self {
 		Self {
 			buffer: Default::default(),
+			attached: false,
 			density: 1.0,
 			geometry: None,
 			min_size: None,
@@ -147,6 +150,7 @@ impl Default for SurfaceState {
 impl BufferedState for SurfaceState {
 	fn apply(&mut self, pending: &mut Self) {
 		self.buffer = pending.buffer.clone();
+		self.attached |= std::mem::take(&mut pending.attached);
 		self.density = pending.density;
 		self.geometry = pending.geometry;
 		self.min_size = pending.min_size;
@@ -159,6 +163,7 @@ impl BufferedState for SurfaceState {
 	fn get_initial_pending(&self) -> Self {
 		Self {
 			buffer: self.buffer.clone(),
+			attached: false,
 			density: self.density,
 			geometry: self.geometry,
 			min_size: self.min_size,
@@ -523,14 +528,25 @@ impl Surface {
 	}
 }
 impl Surface {
-	pub(super) fn buffer_update(&self) {
-		let (buffer, src) = {
-			let state = self.state.lock();
-			(state.current().buffer.clone(), state.current().uv_src())
+	fn buffer_update(&self) {
+		let (attached, buffer, src) = {
+			let mut state = self.state.lock();
+			let current = &mut state.current;
+			(
+				std::mem::take(&mut current.attached),
+				current.buffer.clone(),
+				current.uv_src(),
+			)
 		};
-		if let Some(buffer) = buffer
-			&& let Some(submit) = buffer.update()
-		{
+		if !attached {
+			return;
+		}
+		let Some(buffer) = buffer else {
+			self.current_buffer_submit.lock().take();
+			self.buffered_surface_update.lock().take();
+			return;
+		};
+		if let Some(submit) = buffer.update() {
 			if let Some(panel_item) = self.panel_item()
 				&& let Some(surface_id) = self.surface_id.get()
 			{
@@ -550,6 +566,14 @@ impl Surface {
 				self.current_buffer_submit.lock().take();
 				self.buffered_surface_update.lock().replace(submit);
 			}
+		}
+	}
+	/// shows what the client last committed again, for when it moves onto another panel item
+	pub fn resubmit_buffer(&self) {
+		if self.buffered_surface_update.lock().is_some() {
+			self.apply_buffered_surface_update_recursive();
+		} else {
+			self.reapply_buffer_recursive();
 		}
 	}
 	pub fn apply_buffered_surface_update_recursive(&self) {
@@ -651,10 +675,12 @@ impl WlSurface for Surface {
 		if x != 0 || y != 0 {
 			self.offset_drag_icon(client, [x, y].into()).await?;
 		}
-		self.state.lock().pending.buffer = buffer.and_then(|b| {
+		let mut state = self.state.lock();
+		state.pending.buffer = buffer.and_then(|b| {
 			let buffer = client.get::<Buffer>(b)?;
 			Some(buffer)
 		});
+		state.pending.attached = true;
 		Ok(())
 	}
 

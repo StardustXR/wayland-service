@@ -502,7 +502,7 @@ impl WlPointer for Pointer {
 			*surface.toplevel.write() = focused_surface.toplevel.read().clone();
 		}
 		// a kinda ugly hack to get the cursor to show on startup
-		surface.buffer_update();
+		surface.resubmit_buffer();
 		self.cursor_surface.lock().await.replace(surface);
 		Ok(())
 	}
